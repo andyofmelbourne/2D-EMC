@@ -1,6 +1,7 @@
 import h5py
 import numpy as np
 import scipy.constants as sc
+from tqdm import tqdm
 
 """
 (base) :~/Documents/git_repos/2D-EMC$ h5ls -r ~/Documents/2023/P3004-take-2/gold/hits_r0087.cxi 
@@ -30,23 +31,35 @@ import scipy.constants as sc
 
 frames = 1000
 
+
 with h5py.File('/home/andyofmelbourne/Documents/2023/P3004-take-2/gold/hits_r0087.cxi', 'r') as f:
     tags = f['/static_emc/good_hit'][()]
-    data = f['entry_1/data_1/data'][np.where(tags)[0][:frames]]
-    xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
-    x_pixel_size = np.abs(xyz[0, 0, 0, 1] - xyz[0, 0, 0, 0])
-    y_pixel_size = np.abs(xyz[0, 0, 1, 0] - xyz[0, 0, 0, 0])
-    pixel_area   = 3 * 3**0.5 / 2 * 136e-6**2 # for hexaginal pixels
+    shape = f['entry_1/data_1/data'].shape
+    dtype = f['entry_1/data_1/data'].dtype
+    data = np.empty((frames,) + shape[1:], dtype=dtype)
+    for i, d in tqdm(enumerate(np.where(tags)[0][:frames]), total = frames, desc = 'loading frames'):
+        data[i] = f['entry_1/data_1/data'][d]
+    
+    datasets = ['/entry_1/instrument_1/detector_1/mask',
+                '/entry_1/instrument_1/detector_1/xyz_map',
+                '/entry_1/instrument_1/detector_1/x_pixel_size',
+                '/entry_1/instrument_1/detector_1/y_pixel_size',
+                '/entry_1/instrument_1/detector_1/pixel_area',
+                '/entry_1/instrument_1/detector_1/distance',
+                '/entry_1/instrument_1/detector_1/background',
+                '/entry_1/instrument_1/source_1/energy',
+                '/static_emc/background_weights',
+                '/entry_1/data_1/data']
     
     with h5py.File('data.cxi', 'w') as g:
-        g['entry_1/data_1/data'] = data
-        g['/entry_1/instrument_1/detector_1/mask'] = f['/entry_1/instrument_1/detector_1/good_pixels'][()]
-        g['/entry_1/instrument_1/detector_1/xyz_map'] = xyz
-        g['/entry_1/instrument_1/detector_1/x_pixel_size'] = x_pixel_size
-        g['/entry_1/instrument_1/detector_1/y_pixel_size'] = y_pixel_size
-        g['/entry_1/instrument_1/detector_1/distance'] = 0.552
-        g['/entry_1/instrument_1/detector_1/pixel_area'] = pixel_area
-        g['/entry_1/instrument_1/source_1/energy'] = 3e3 * sc.e * np.ones((frames,), dtype=float)
-        g['/entry_1/instrument_1/source_1/wavelength'] = sc.h * sc.e / (3e3 * sc.e) * np.ones((frames,), dtype=float)
-    
-
+        for d in datasets:
+            print(d)
+            if 'data' in d :
+                v = data
+            else :
+                v = f[d][()]
+            
+            if d in g :
+                g[d][...] = v
+            else :
+                g[d] = v
