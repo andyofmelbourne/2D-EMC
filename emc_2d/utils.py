@@ -335,6 +335,7 @@ def calculate_probability_matrix(frames, w, W, b, B, K, logR, P, beta):
     # probability matrix
     for d in tqdm(frames, desc = 'calculating probability matrix', disable = silent):
         T = w[d] * W + np.dot(b[d], B)
+        #print(T.min(), T.max(), b.min(), b.max(), w.min(), w.max(), W.min(), W.max())
         logR[d] = beta * np.sum(K[d] * np.log(T) - T, axis=-1)
 
         m = np.max(logR[d])
@@ -342,9 +343,9 @@ def calculate_probability_matrix(frames, w, W, b, B, K, logR, P, beta):
         P[d]     = np.exp(P[d])
         P[d]    /= np.sum(P[d])
 
-def calculate_P_stuff(P, logR):
-    expectation_value = np.sum(P * logR)
-    log_likihood      = np.sum(logR)
+def calculate_P_stuff(P, logR, beta):
+    expectation_value = np.sum(P * logR) / beta
+    log_likihood      = np.sum(logR) / beta
     print('expectation value: {:.2e}'.format(expectation_value))
     print('log likelihood   : {:.2e}'.format(log_likihood))
     return expectation_value, log_likihood
@@ -392,7 +393,7 @@ def update_W(my_classes, w, W, b, B, P, K, minval = 1e-15, iters = 4):
         np.clip(step, step_min, None, step)
         W[my_classes]   += step
         m = W[my_classes] > minval
-        np.clip(W[my_classes], minval, xmax, W[my_classes])    
+        W[my_classes] = np.clip(W[my_classes], minval, xmax)    
         
         if not silent : 
             print(i, np.mean((f - c[..., None])[m]**2)**0.5)

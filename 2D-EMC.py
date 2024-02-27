@@ -65,15 +65,22 @@ for i in range(iteration, config['iters']):
     # ------------------
     beta = config['betas'][i]
     utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P, beta)
-    if rank == 0 :
-        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR)
     utils.allgather(P, axis=0)
+    utils.allgather(logR, axis=0)
+    if rank == 0 :
+        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
     
     
     # Maximise
     # --------
     utils.update_W(my_classes, w, W, b, B, P, K, minval, iters)
     utils.allgather(W, axis=0)
+
+    # check
+    #utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
+    #utils.allgather(logR, axis=0)
+    #if rank == 0 :
+    #    expectation_value, log_likihood = utils.calculate_P_stuff(P, logR)
     
     utils.update_w(my_frames, w, W, b, B, P, K, minval, iters)
     utils.allgather(w, axis=0)

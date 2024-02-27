@@ -7,8 +7,8 @@ for i in range(87, 96):
 
 classes            = 3
 rotations          = 20
-sampling           = 1
-model_length       = 128
+sampling           = 4
+model_length       = 64
 background_classes = 1
 max_frames         = 200
 #frame_shape        = (16, 128, 512)
