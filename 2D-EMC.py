@@ -77,21 +77,35 @@ for i in range(iteration, config['iters']):
     utils.allgather(W, axis=0)
 
     # check
-    #utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
-    #utils.allgather(logR, axis=0)
-    #if rank == 0 :
-    #    expectation_value, log_likihood = utils.calculate_P_stuff(P, logR)
+    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
+    utils.allgather(logR, axis=0)
+    if rank == 0 :
+        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
     
     utils.update_w(my_frames, w, W, b, B, P, K, minval, iters)
     utils.allgather(w, axis=0)
+
+    # check
+    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
+    utils.allgather(logR, axis=0)
+    if rank == 0 :
+        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
     
     utils.update_b(my_frames, w, W, b, B, P, K, minval, iters)
     utils.allgather(b, axis=0)
+
+    # check
+    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
+    utils.allgather(logR, axis=0)
+    if rank == 0 :
+        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
     
     
     # Compress
     # --------
-    utils.compress(my_classes, W, R, xyz, i0, dx, I)
+    #utils.compress(my_classes, P, K, W, R, xyz, i0, dx, I)
+    #utils.compress_P_thresh(my_classes, P, W, R, xyz, i0, dx, I)
+    utils.compress_P_weight(my_classes, P, W, R, xyz, i0, dx, I)
     utils.allgather(I, axis=0)
     
     

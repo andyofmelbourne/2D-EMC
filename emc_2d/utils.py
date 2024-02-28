@@ -308,11 +308,15 @@ def expand(classes, points_I, I, W, xyz, R, C, minval = 1e-8):
             points[:, 1] = R[r, 1, 0] * xyz[0] + R[r, 1, 1] * xyz[1]
             W[c, r] = np.clip(C * interp(points), minval, None)
 
-def compress(classes, W, R, xyz, i0, dx, I):
+def compress(classes, P, K, W, R, xyz, i0, dx, I):
     _, rotations, pixels = W.shape
     
     I.fill(0)
-    overlap = np.zeros(I.shape, dtype=int)
+    overlap1 = np.zeros(I.shape, dtype=int)
+    overlap2 = np.zeros(I.shape, dtype=float)
+    #weights = np.tensordot(np.sum(K, axis=1), P, axes=1)
+    weights = np.sum(P, axis=0)
+    print(weights)
     
     points = np.empty((2, pixels))
     mi     = np.empty((pixels,), dtype=int)
@@ -323,12 +327,63 @@ def compress(classes, W, R, xyz, i0, dx, I):
             points[1, :] = R[r, 1, 0] * xyz[0] + R[r, 1, 1] * xyz[1]
             mi[:]   = np.round(i0 + points[0]/dx)
             mj[:]   = np.round(i0 + points[1]/dx)
+            
+            np.add.at(I[c], (mi, mj), W[c, r] * weights[c, r])
+            np.add.at(overlap1[c], (mi, mj), 1)
+            np.add.at(overlap2[c], (mi, mj), weights[c, r])
 
-            np.add.at(I[c], (mi, mj), W[c, r])
-            np.add.at(overlap[c], (mi, mj), 1)
+    overlap2[overlap1 == 0] = 1
+    I /= overlap2
 
-    overlap[overlap==0] = 1
-    I /= overlap
+def compress_P_weight(classes, P, W, R, xyz, i0, dx, I, tol_P = 1e-3):
+    _, rotations, pixels = W.shape
+    
+    I.fill(0)
+    overlap1 = np.zeros(I.shape, dtype=int)
+    overlap2 = np.zeros(I.shape, dtype=float)
+    #weights = np.tensordot(np.sum(K, axis=1), P, axes=1)
+    weights = np.sum(P, axis=0)
+    print(weights)
+    
+    points = np.empty((2, pixels))
+    mi     = np.empty((pixels,), dtype=int)
+    mj     = np.empty((pixels,), dtype=int)
+    for c in tqdm(classes, desc = 'Compress', disable = silent):
+        for r in np.where(weights[c] > (tol_P * weights[c].max()))[0]:
+            points[0, :] = R[r, 0, 0] * xyz[0] + R[r, 0, 1] * xyz[1]
+            points[1, :] = R[r, 1, 0] * xyz[0] + R[r, 1, 1] * xyz[1]
+            mi[:]   = np.round(i0 + points[0]/dx)
+            mj[:]   = np.round(i0 + points[1]/dx)
+            
+            np.add.at(I[c], (mi, mj), W[c, r] * weights[c, r])
+            np.add.at(overlap1[c], (mi, mj), 1)
+            np.add.at(overlap2[c], (mi, mj), weights[c, r])
+    
+    overlap2[overlap1 == 0] = 1
+    I /= overlap2
+
+def compress_P_thresh(classes, P, W, R, xyz, i0, dx, I, tol_P = 1e-2):
+    _, rotations, pixels = W.shape
+    
+    I.fill(0)
+    overlap1 = np.zeros(I.shape, dtype=int)
+    weights  = np.sum(P, axis=0)
+    
+    points = np.empty((2, pixels))
+    mi     = np.empty((pixels,), dtype=int)
+    mj     = np.empty((pixels,), dtype=int)
+    for c in tqdm(classes, desc = 'Compress', disable = silent):
+        for r in np.where(weights[c] > (tol_P * weights[c].max()))[0]:
+            points[0, :] = R[r, 0, 0] * xyz[0] + R[r, 0, 1] * xyz[1]
+            points[1, :] = R[r, 1, 0] * xyz[0] + R[r, 1, 1] * xyz[1]
+            mi[:]   = np.round(i0 + points[0]/dx)
+            mj[:]   = np.round(i0 + points[1]/dx)
+            
+            np.add.at(I[c], (mi, mj), W[c, r] * weights[c, r])
+            np.add.at(overlap1[c], (mi, mj), 1)
+
+    overlap1[overlap1 == 0] = 1
+    I /= overlap1
 
 
 def calculate_probability_matrix(frames, w, W, b, B, K, logR, P, beta):
