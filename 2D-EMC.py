@@ -32,12 +32,20 @@ pixels                     = B.shape[-1]
 J                          = I.shape[1]
 
 # load data
-with h5py.File(sys.argv[1] + '/data.cxi') as f:
-    xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
-    data = f['entry_1/data_1/data']
-    K = np.zeros((frames, pixels), dtype = data.dtype)
-    for d in tqdm(range(frames), desc = 'loading data'):
-        K[d] = f['entry_1/data_1/data'][d]
+if rank == 0 :
+    with h5py.File(sys.argv[1] + '/data.cxi') as f:
+        xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
+        data = f['entry_1/data_1/data']
+        K = np.zeros((frames, pixels), dtype = data.dtype)
+        for d in tqdm(range(1), desc = 'loading data'):
+            data.read_direct(K, np.s_[:], np.s_[:])
+        #for d in tqdm(range(frames), desc = 'loading data'):
+        #    K[d] = f['entry_1/data_1/data'][d]
+else :
+    K = xyz = None
+
+K   = comm.bcast(K, root=0)
+xyz = comm.bcast(xyz, root=0)
 
 minval = 1e-10
 iters  = 4
@@ -75,31 +83,13 @@ for i in range(iteration, config['iters']):
     # --------
     utils.update_W(my_classes, w, W, b, B, P, K, minval, iters)
     utils.allgather(W, axis=0)
-
-    # check
-    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
-    utils.allgather(logR, axis=0)
-    if rank == 0 :
-        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
     
     utils.update_w(my_frames, w, W, b, B, P, K, minval, iters)
     utils.allgather(w, axis=0)
 
-    # check
-    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
-    utils.allgather(logR, axis=0)
-    if rank == 0 :
-        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
-    
     utils.update_b(my_frames, w, W, b, B, P, K, minval, iters)
     utils.allgather(b, axis=0)
 
-    # check
-    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P.copy(), beta)
-    utils.allgather(logR, axis=0)
-    if rank == 0 :
-        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
-    
     
     # Compress
     # --------
