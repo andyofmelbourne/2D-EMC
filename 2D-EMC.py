@@ -1,5 +1,6 @@
 import numpy as np
 import h5py
+from emc_2d import utils_cl
 from emc_2d import utils
 from tqdm import tqdm
 import sys
@@ -9,6 +10,10 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+
+"""
+Assume W is too big to fit in memory
+"""
 
 # load configuration file
 config = utils.load_config(sys.argv[1] + '/config.py')
@@ -36,24 +41,22 @@ if rank == 0 :
     with h5py.File(sys.argv[1] + '/data.cxi') as f:
         xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
         data = f['entry_1/data_1/data']
+        indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
+        frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
         K = np.zeros((frames, pixels), dtype = data.dtype)
         for d in tqdm(range(1), desc = 'loading data'):
             data.read_direct(K, np.s_[:], np.s_[:])
-        #for d in tqdm(range(frames), desc = 'loading data'):
-        #    K[d] = f['entry_1/data_1/data'][d]
 else :
     K = xyz = None
 
 K   = comm.bcast(K, root=0)
 xyz = comm.bcast(xyz, root=0)
 
+Ksums = np.sum(K, axis=1)
+
 minval = 1e-10
 iters  = 4
 i0     = J // 2
-
-# initialise
-# ----------
-W    = np.empty((classes, rotations, pixels))
 
 # split classes by rank
 my_classes = list(range(rank, classes, size))
@@ -61,50 +64,35 @@ my_classes = list(range(rank, classes, size))
 # split frames by rank
 my_frames = list(range(rank, frames, size))
 
+W    = np.empty((classes, rotations, pixels))
 
 for i in range(iteration, config['iters']): 
-    # Expand 
-    # ------
-    utils.expand(my_classes, points_I, I, W, xyz, R, C, minval)
-    utils.allgather(W, axis=0)
-    
+    beta = config['betas'][i]
     
     # Probability matrix
     # ------------------
-    beta = config['betas'][i]
-    utils.calculate_probability_matrix(my_frames, w, W, b, B, K, logR, P, beta)
-    utils.allgather(P, axis=0)
-    utils.allgather(logR, axis=0)
-    if rank == 0 :
-        expectation_value, log_likihood = utils.calculate_P_stuff(P, logR, beta)
+    c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P, xyz, dx, beta)
+    expectation_value, log_likihood = c.calculate(logR, P)
+    del c
     
+    # Maximise + Compress
+    # -------------------
+    cW = utils_cl.Update_W(w, I, b, B, P, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
+    cW.update()
+    Wsums = cW.Wsums.copy()
+    del cW
     
-    # Maximise
-    # --------
-    utils.update_W(my_classes, w, W, b, B, P, K, minval, iters)
-    utils.allgather(W, axis=0)
+    # this will only help next iteration
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
+    cw.update()
     
-    utils.update_w(my_frames, w, W, b, B, P, K, minval, iters)
-    utils.allgather(w, axis=0)
+    cb = utils_cl.Update_b(B, Ksums, cw)
+    cb.update()
+    del cb; del cw
 
-    utils.update_b(my_frames, w, W, b, B, P, K, minval, iters)
-    utils.allgather(b, axis=0)
-
-    
-    # Compress
-    # --------
-    #utils.compress(my_classes, P, K, W, R, xyz, i0, dx, I)
-    #utils.compress_P_thresh(my_classes, P, W, R, xyz, i0, dx, I)
-    utils.compress_P_weight(my_classes, P, W, R, xyz, i0, dx, I)
-    utils.allgather(I, axis=0)
-    
-    
     # Save
     # ----
     if rank == 0 : 
         utils.save(sys.argv[1], w, b, P, logR, I, beta, expectation_value, log_likihood, i)
         utils.plot_iter(sys.argv[1])
-
-# show W
-# --------
-#ims = utils.make_W_ims(W, mask, s, shape_2d)
+    

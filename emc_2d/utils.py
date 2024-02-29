@@ -7,10 +7,12 @@ import pathlib
 import runpy
 import h5py
 
-from mpi4py import MPI
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-size = comm.Get_size()
+
+#from mpi4py import MPI
+#comm = MPI.COMM_WORLD
+#rank = comm.Get_rank()
+#size = comm.Get_size()
+rank = 0
 
 if rank == 0 :
     silent = False
@@ -343,7 +345,6 @@ def compress_P_weight(classes, P, W, R, xyz, i0, dx, I, tol_P = 1e-3):
     overlap2 = np.zeros(I.shape, dtype=float)
     #weights = np.tensordot(np.sum(K, axis=1), P, axes=1)
     weights = np.sum(P, axis=0)
-    print(weights)
     
     points = np.empty((2, pixels))
     mi     = np.empty((pixels,), dtype=int)
@@ -386,13 +387,12 @@ def compress_P_thresh(classes, P, W, R, xyz, i0, dx, I, tol_P = 1e-2):
     I /= overlap1
 
 
-def calculate_probability_matrix(frames, w, W, b, B, K, logR, P, beta):
+def calculate_probability_matrix(frames, w, W, I, b, B, K, logR, P, beta):
     # probability matrix
-    for d in tqdm(frames, desc = 'calculating probability matrix', disable = silent):
+    for i, d in tqdm(enumerate(frames), total = len(frames), desc = 'calculating probability matrix', disable = silent):
         T = w[d] * W + np.dot(b[d], B)
-        #print(T.min(), T.max(), b.min(), b.max(), w.min(), w.max(), W.min(), W.max())
         logR[d] = beta * np.sum(K[d] * np.log(T) - T, axis=-1)
-
+        
         m = np.max(logR[d])
         P[d]     = logR[d] - m
         P[d]     = np.exp(P[d])
@@ -433,8 +433,8 @@ def update_W(my_classes, w, W, b, B, P, K, minval = 1e-15, iters = 4):
         for d in tqdm(range(frames), desc = f'updating classes, iteration {i}', disable = silent):
             T[:]  = W[my_classes] + np.dot(b[d], B) / w[d]
             PK[:] = P[d, my_classes, :, None] * K[d]
-            f += PK / T
-            g -= PK / T**2
+            f    += PK / T
+            g    -= PK / T**2
         
         #print('T^2 min:', (T**2).min())
         #print('T min:', T.min())
@@ -529,14 +529,13 @@ def update_b(my_frames, w, W, b, B, P, K, minval = 1e-8, iters = 4):
             if not silent :
                 print(i, np.mean((f - c)[m]**2)**0.5)
 
-def make_W_ims(W, mask, s, shape_2d):
+def make_W_ims(W, pixel_indices, frame_shape):
     classes, rotations, pixels = W.shape
-    ims = np.zeros((classes, rotations) + shape_2d)
+    ims = np.zeros((classes, rotations) + frame_shape)
     for c in range(classes):
         for r in range(rotations):
-            ims[c, r][mask[s]] = W[c, r]
-            #ims[c, r][mask[s]] = xmax[c, r]
-
+            ims[c, r].ravel()[pixel_indices] = W[c, r]
+    
     # show C
     #C_im = np.zeros(shape_2d)
     #C_im[mask[s]] = C
