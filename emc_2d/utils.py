@@ -21,8 +21,6 @@ else :
 def load_config(path):
     p = pathlib.Path(path)
     
-    print(p.absolute())
-    
     # returns a dict
     config = runpy.run_path(str(p.absolute()))
     
@@ -65,7 +63,7 @@ def plot_iter(recon_dir):
         I                   = f['models'][()]
         B                   = f['background'][()]
         expectation_values  = f['/iterations/expectation_value'][()]
-        iteration           = f['/iterations/iters'][()]
+        iteration           = f['/iterations/iters'][()] - 1
 
     with h5py.File(data_file) as f:
         pixel_indices = f['/entry_1/instrument_1/detector_1/pixel_indices'][()]
@@ -164,18 +162,18 @@ def save(outdir, w, b, P, logR, I, beta, expectation_value, log_likihood, iterat
         
         # resize datasets if required
         if f['iterations/expectation_value'].shape[0] <= iteration :
-            f['iterations/expectation_value'].resize(iteration + 1)
-            f['iterations/log_likihood'].resize(iteration + 1)
-            f['iterations/most_likely_class'].resize(iteration + 1)
-            f['iterations/beta'].resize(iteration + 1)
+            f['iterations/expectation_value'].resize(iteration + 1, axis=0)
+            f['iterations/log_likihood'].resize(iteration + 1, axis=0)
+            f['iterations/most_likely_class'].resize(iteration + 1, axis=0)
+            f['iterations/beta'].resize(iteration + 1, axis=0)
         
         f['iterations/expectation_value'][iteration] = expectation_value
         f['iterations/log_likihood'][iteration] = log_likihood
         f['iterations/beta'][iteration] = beta
-        f['iterations/iters'][...] = iteration
-        
         mc = np.argmax(np.max(P, axis=2), axis=1)
         f['iterations/most_likely_class'][iteration] = mc
+        f['iterations/iters'][...] = iteration + 1
+        
         
             
 

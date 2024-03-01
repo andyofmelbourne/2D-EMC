@@ -37,12 +37,17 @@ import shutil
 config = utils.load_config(sys.argv[1])
 
 # make output directory
-for n in range(1, 1000):
-    out = 'recon_%.4d'%n
-    if not os.path.exists(out) :
-        print('creating reconstruction directory (can be renamed later)', out)
-        os.mkdir(out)
-        break
+if len(sys.argv) == 3 :
+    out = sys.argv[2]
+    write_output = False
+else :
+    write_output = True
+    for n in range(1, 1000):
+        out = 'recon_%.4d'%n
+        if not os.path.exists(out) :
+            print('creating reconstruction directory (can be renamed later)', out)
+            os.mkdir(out)
+            break
 
 
 
@@ -103,13 +108,14 @@ with h5py.File(config['data'][0], 'r') as f:
     file_metadata['/entry_1/instrument_1/detector_1/pixel_indices'] = np.where(mask.ravel())[0]
     file_metadata['/entry_1/instrument_1/detector_1/frame_shape'] = frame_shape
     
-    with h5py.File(output, 'w') as g:
-        for d, v in file_metadata.items():
-            print('writing dataset', d,'from first input file')
-            if d in g :
-                g[d][...] = v
-            else :
-                g[d] = v
+    if write_output :
+        with h5py.File(output, 'w') as g:
+            for d, v in file_metadata.items():
+                print('writing dataset', d,'from first input file')
+                if d in g :
+                    g[d][...] = v
+                else :
+                    g[d] = v
 
 # get location of good frames in datasets
 frames = {}
@@ -129,23 +135,24 @@ file_metadata['frames'] = number_of_frames
 
 pixels = out_shape = (np.sum(mask),)
 
-frame_index = 0
-with h5py.File(output, 'a') as g:
-    data = g.create_dataset('entry_1/data_1/data', 
-                            (number_of_frames,) + out_shape,  
-                            dtype = data_dtype, 
-                            compression='gzip',
-                            compression_opts = 1)
-    
-    for fnam in frames :
+if write_output :
+    frame_index = 0
+    with h5py.File(output, 'a') as g:
+        data = g.create_dataset('entry_1/data_1/data', 
+                                (number_of_frames,) + out_shape,  
+                                dtype = data_dtype, 
+                                compression='gzip',
+                                compression_opts = 1)
         
-        with h5py.File(fnam, 'r') as f:
-            data_file = f['entry_1/data_1/data']
+        for fnam in frames :
             
-            for d in tqdm(frames[fnam], desc = fnam):
-                frame             = data_file[d][mask] 
-                data[frame_index] = frame
-                frame_index      += 1
+            with h5py.File(fnam, 'r') as f:
+                data_file = f['entry_1/data_1/data']
+                
+                for d in tqdm(frames[fnam], desc = fnam):
+                    frame             = data_file[d][mask] 
+                    data[frame_index] = frame
+                    frame_index      += 1
 
 
 J         = config['model_length']

@@ -66,13 +66,13 @@ my_frames = list(range(rank, frames, size))
 
 W    = np.empty((classes, rotations, pixels))
 
-for i in range(iteration, config['iters']): 
-    beta = config['betas'][i]
+for i in range(iteration, iteration + config['iters']): 
+    beta = config['betas'][min(config['iters']-1, i)]
     
     # Probability matrix
     # ------------------
     c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P, xyz, dx, beta)
-    expectation_value, log_likihood = c.calculate(logR, P)
+    expectation_value, log_likihood = c.calculate()
     del c
     
     # Maximise + Compress

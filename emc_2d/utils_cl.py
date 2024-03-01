@@ -5,7 +5,15 @@ from tqdm import tqdm
 import sys
 import pathlib
 
-rank = 0
+from mpi4py import MPI
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+if rank == 0 :
+    silent = False
+else :
+    silent = True
 
 # find an opencl device (preferably a GPU) in one of the available platforms
 done = False
@@ -48,33 +56,41 @@ class Prob():
         but if we do it this way we have to calcuate the entire W for every frame (~5e5)
         seems to be pretty fast anyway...
         """
-        pixels      = np.int32(B.shape[-1])
-        frames, classes, rotations = logR.shape
-        self.frames    = frames
-        self.classes   = classes
-        self.rotations = rotations
+        # split frames by MPI rank
+        frames = P.shape[0]
+        self.ds = ds = np.linspace(0, frames, size + 1).astype(int)
+        self.dstart = dstart = ds[:-1:][rank]
+        self.dstop  = dstop  = ds[1::][rank]
+        
+        self.frames    = frames    = self.dstop - self.dstart
+        self.classes   = classes   = np.int32(P.shape[1])
+        self.rotations = rotations = np.int32(P.shape[2])
+        self.pixels    = pixels    = np.int32(B.shape[-1])
+         
         self.beta = np.float32(beta)
         self.dx   = np.float32(dx)
-        self.pixels = pixels
         
         self.i0 = np.float32(I.shape[-1] // 2)
+
+        self.P = P
+        self.logR = logR
         
-        self.LR_cl = cl.array.zeros(queue, logR.shape, dtype = np.float32)
-        self.w_cl  = cl.array.empty(queue, w.shape   , dtype = np.float32)
+        self.LR_cl = cl.array.zeros(queue, (frames, classes, rotations), dtype = np.float32)
+        self.w_cl  = cl.array.empty(queue, (frames,)   , dtype = np.float32)
         self.I_cl  = cl.array.empty(queue, I.shape   , dtype = np.float32)
-        self.b_cl  = cl.array.empty(queue, b.shape   , dtype = np.float32)
-        self.B_cl  = cl.array.empty(queue, B.T.shape , dtype = np.float32)
-        self.K_cl  = cl.array.empty(queue, K.T.shape , dtype = np.uint8)
+        self.b_cl  = cl.array.empty(queue, (frames,)   , dtype = np.float32)
+        self.B_cl  = cl.array.empty(queue, (pixels,) , dtype = np.float32)
+        self.K_cl  = cl.array.empty(queue, (pixels, frames) , dtype = np.uint8)
         self.C_cl  = cl.array.empty(queue, C.shape   , dtype = np.float32)
         self.R_cl  = cl.array.empty(queue, R.shape   , dtype = np.float32)
         self.rx_cl  = cl.array.empty(queue, xyz[0].shape   , dtype = np.float32)
         self.ry_cl  = cl.array.empty(queue, xyz[1].shape   , dtype = np.float32)
         
         # load arrays to gpu
-        cl.enqueue_copy(queue, self.w_cl.data, w)
-        cl.enqueue_copy(queue, self.b_cl.data, b)
+        cl.enqueue_copy(queue, self.w_cl.data, w[dstart: dstop])
+        cl.enqueue_copy(queue, self.b_cl.data, b[dstart: dstop])
         cl.enqueue_copy(queue, self.B_cl.data, B)
-        cl.enqueue_copy(queue, self.K_cl.data, np.ascontiguousarray(K.T))
+        cl.enqueue_copy(queue, self.K_cl.data, np.ascontiguousarray(K[dstart: dstop].T))
         cl.enqueue_copy(queue, self.C_cl.data, C)
         cl.enqueue_copy(queue, self.R_cl.data, R)
         cl.enqueue_copy(queue, self.rx_cl.data, np.ascontiguousarray(xyz[0].astype(np.float32)))
@@ -90,27 +106,43 @@ class Prob():
         cl.enqueue_copy(queue, dest = self.I_cl, src = I, 
                         origin = (0, 0, 0), region = shape[::-1])
 
+    def calculate(self): 
+        if not silent :
+            print()
         
-    def calculate(self, logR, P): 
-        for i in tqdm(range(1)) :
+        logR = self.logR
+        P    = self.P
+        for i in tqdm(range(1), desc = 'calculating logR matrix', disable = silent) :
             cl_code.calculate_LR(queue, (self.frames, self.classes, self.rotations), None, 
                     self.I_cl, self.LR_cl.data, self.K_cl.data, self.w_cl.data, 
                     self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
                     self.rx_cl.data, self.ry_cl.data,
                     self.beta, self.i0, self.dx, self.pixels)
-            cl.enqueue_copy(queue, dest = logR, src=self.LR_cl.data)
+            cl.enqueue_copy(queue, dest = logR[self.dstart: self.dstop], src=self.LR_cl.data)
         
-        expectation_value = 0.
-        log_likihood      = 0.
-        for d in range(self.frames):
-            m = np.max(logR[d])
+        self.expectation_value = 0.
+        self.log_likihood      = 0.
+        for d in range(self.dstart, self.dstop):
+            m        = np.max(logR[d])
             P[d]     = logR[d] - m
             P[d]     = np.exp(P[d])
             P[d]    /= np.sum(P[d])
+            
+            self.expectation_value += np.sum(P[d] * logR[d]) / self.beta
+            self.log_likihood      += np.sum(logR[d])        / self.beta
 
-            expectation_value += np.sum(P[d] * logR[d]) / self.beta
-            log_likihood      += np.sum(logR[d])        / self.beta
-        return expectation_value, log_likihood
+        self.allgather()
+        return self.expectation_value, self.log_likihood
+    
+    def allgather(self):
+        for r in range(size):
+            dstart = self.ds[:-1:][r]
+            dstop  = self.ds[1::][r]
+            self.logR[dstart:dstop] = comm.bcast(self.logR[dstart:dstop], root=r)
+            self.P[dstart:dstop]    = comm.bcast(self.P[dstart:dstop], root=r)
+        
+        self.expectation_value = comm.allreduce(self.expectation_value)
+        self.log_likihood      = comm.allreduce(self.log_likihood)
         
         
 class Update_W():
@@ -178,115 +210,102 @@ class Update_W():
     """
     
     def __init__(self, w, I, b, B, P, K, C, R, xyz, dx, pixel_chunk_size, minval = 1e-15, iters = 4):
-        self.B = B
-        self.P = P
-        self.K = K
-        self.I = I
-        self.C = C
-        self.R = R
-        self.xyz = xyz
-        self.iters  = np.int32(iters)
-        self.dx    = np.float32(dx)
-        self.i0    = np.float32(I.shape[-1]//2)
-        self.pixel_chunk = pixel_chunk_size
-        self.frames, self.classes, self.rotations = (np.int32(s) for s in P.shape)
-        
-        self.B = B
-        self.K = K
-        self.xyz = xyz
-        
-        # generate list of start stop values
+        # split pixels by MPI rank
         pixels = B.shape[-1]
-        self.istart = list(range(0, pixels, pixel_chunk_size))
-        self.istop  = list(range(pixel_chunk_size, pixels, pixel_chunk_size)) + [pixels]
-        
-        # initialise pixel based arrays
-        self.B_cl  = cl.array.empty(queue, (pixel_chunk_size,)         , dtype = np.float32)
-        self.rx_cl = cl.array.empty(queue, (pixel_chunk_size,)        , dtype = np.float32)
-        self.ry_cl = cl.array.empty(queue, (pixel_chunk_size,)        , dtype = np.float32)
-        self.K_cl  = cl.array.empty(queue, (self.frames, pixel_chunk_size,) , dtype = np.uint8)
-    
-        # initialise other arrays
-        self.W_cl = cl.array.empty(queue, (pixel_chunk_size,), dtype = np.float32)
-        #self.W    = np.empty((self.classes, self.rotations, pixels), dtype=np.float32)
-        self.Wbuf = np.empty((pixel_chunk_size,), dtype=np.float32)
+        self.i_s = i_s = np.linspace(0, pixels, size + 1).astype(int)
+        self.istart = istart = i_s[:-1:][rank]
+        self.istop  = istop  = i_s[1::][rank]
+         
+        self.pixels    = pixels    = np.int32(istop - istart)
+        self.frames    = frames    = np.int32(P.shape[0])
+        self.classes   = classes   = np.int32(P.shape[1])
+        self.rotations = rotations = np.int32(P.shape[2])
+        self.iters     = np.int32(iters)
+        self.R         = R
+        self.i0        = I.shape[-1] // 2
+        self.dx        = dx
 
-        # load to gpu
+        self.rx = np.ascontiguousarray(xyz[0, istart:istop].astype(np.float32))
+        self.ry = np.ascontiguousarray(xyz[1, istart:istop].astype(np.float32))
+
+        # for merging
+        self.I = I
+        self.I.fill(0)
+        self.overlap2 = np.zeros(I.shape, dtype=float)
+        self.weights = np.sum(P, axis=0)
+        self.C       = C[istart : istop]
+          
+        self.points = np.empty((2, pixels))
+        self.mi     = np.empty((pixels,), dtype=int)
+        self.mj     = np.empty((pixels,), dtype=int)
+
+        # initialise gpu arrays
+        self.B_cl  = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
+        self.rx_cl = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
+        self.ry_cl = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
+        self.K_cl  = cl.array.empty(queue, (self.frames, pixels,) , dtype = np.uint8)
+        self.W_cl  = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
         self.P_cl  = cl.array.empty(queue, P.shape   , dtype = np.float32)
         self.w_cl  = cl.array.empty(queue, w.shape   , dtype = np.float32)
         self.b_cl  = cl.array.empty(queue, b.shape   , dtype = np.float32)
         
+        self.Wbuf  = np.empty((pixels,), dtype=np.float32)
+        
         cl.enqueue_copy(queue, dest = self.P_cl.data, src = P)
         cl.enqueue_copy(queue, dest = self.w_cl.data, src = w)
         cl.enqueue_copy(queue, dest = self.b_cl.data, src = b)
+        cl.enqueue_copy(queue, dest = self.B_cl.data, src = B[0, istart:istop])
+        cl.enqueue_copy(queue, dest = self.K_cl.data, src = np.ascontiguousarray(K[:, istart:istop]))
+        cl.enqueue_copy(queue, self.rx_cl.data, self.rx)
+        cl.enqueue_copy(queue, self.ry_cl.data, self.ry)
         
         # calculate c[t, r] = sum_d w[d] P[d, t, r]
         self.c = np.tensordot(w, P, axes=1)
-
+        
         # for w update 
         self.Wsums = np.zeros((self.classes, self.rotations), dtype=np.float32)
-        
-        # for merging
-        self.rx = np.empty((pixel_chunk_size,), dtype=np.float32)
-        self.ry = np.empty((pixel_chunk_size,), dtype=np.float32)
-        self.I.fill(0)
-        self.overlap1 = np.zeros(I.shape, dtype=int)
-        self.overlap2 = np.zeros(I.shape, dtype=float)
-        self.weights = np.sum(P, axis=0)
-          
-        self.points = np.empty((2, pixel_chunk_size))
-        self.mi     = np.empty((pixel_chunk_size,), dtype=int)
-        self.mj     = np.empty((pixel_chunk_size,), dtype=int)
 
-    def merge_pixels(self, t, r, istart, istop):
-        pixels = istop - istart
+    def merge_pixels(self, t, r):
         self.points[0] = self.R[r, 0, 0] * self.rx + self.R[r, 0, 1] * self.ry
         self.points[1] = self.R[r, 1, 0] * self.rx + self.R[r, 1, 1] * self.ry
         self.mi[:] = np.round(self.i0 + self.points[0]/self.dx)
         self.mj[:] = np.round(self.i0 + self.points[1]/self.dx)
         
-        np.add.at(self.I[t], (self.mi[:pixels], self.mj[:pixels]), self.Wbuf[:pixels] / self.C[istart: istop] * self.weights[t, r])
-        np.add.at(self.overlap1[t], (self.mi[:pixels], self.mj[:pixels]), 1)
-        np.add.at(self.overlap2[t], (self.mi[:pixels], self.mj[:pixels]), self.weights[t, r])
+        np.add.at(self.I[t], (self.mi, self.mj), self.Wbuf / self.C * self.weights[t, r])
+        np.add.at(self.overlap2[t], (self.mi, self.mj), self.weights[t, r])
         
         # keep track of Wsums
-        self.Wsums[t, r] += np.sum(self.Wbuf[:pixels])
-    
-        
-    def load_pixel_chunk(self, istart, istop):
-        pixels = istop-istart
-        self.rx[:pixels] = np.ascontiguousarray(self.xyz[0, istart:istop].astype(np.float32))
-        self.ry[:pixels] = np.ascontiguousarray(self.xyz[1, istart:istop].astype(np.float32))
-        
-        cl.enqueue_copy(queue, dest = self.B_cl.data, src = self.B[0, istart:istop])
-        cl.enqueue_copy(queue, dest = self.K_cl.data, src = np.ascontiguousarray(self.K[:, istart:istop]))
-            
-        cl.enqueue_copy(queue, self.rx_cl.data, self.rx[:pixels])
-        cl.enqueue_copy(queue, self.ry_cl.data, self.ry[:pixels])
+        self.Wsums[t, r] += np.sum(self.Wbuf)
         
     def update(self):
-        for istart, istop in tqdm(zip(self.istart, self.istop), total = len(self.istart), desc='updating classes'):
-            pixels = np.int32(istop-istart)
-            self.load_pixel_chunk(istart, istop)
-
-            for t in tqdm(np.arange(self.classes, dtype=np.int32), desc='looping over classes', leave = False):
-                for r in tqdm(np.arange(self.rotations, dtype=np.int32), desc='looping over rotations', leave = False):
-                    P_offset = t * self.rotations + r
-                    P_stride = self.classes * self.rotations
-                    
-                    cl_code.update_W(queue, (pixels,), None, 
-                                     self.W_cl.data, self.B_cl.data, 
-                                     self.w_cl.data, self.b_cl.data,
-                                     self.K_cl.data, self.P_cl.data,
-                                     self.c[t, r], self.iters, P_offset, P_stride,
-                                     self.frames, pixels)
-                                 
-                    cl.enqueue_copy(queue, dest = self.Wbuf[:pixels], src = self.W_cl.data)
-                    #self.W[t, r, istart:istop] = self.Wbuf[:pixels]
-
-                    self.merge_pixels(t, r, istart, istop)
+        if not silent : print()
+        for t in tqdm(np.arange(self.classes, dtype=np.int32), desc='updating classes', disable = silent):
+            for r in tqdm(np.arange(self.rotations, dtype=np.int32), desc='looping over rotations', leave = False, disable = silent):
+                P_offset = t * self.rotations + r
+                P_stride = self.classes * self.rotations
+                
+                cl_code.update_W(queue, (self.pixels,), None, 
+                                 self.W_cl.data, self.B_cl.data, 
+                                 self.w_cl.data, self.b_cl.data,
+                                 self.K_cl.data, self.P_cl.data,
+                                 self.c[t, r], self.iters, P_offset, P_stride,
+                                 self.frames, self.pixels)
+                             
+                cl.enqueue_copy(queue, dest = self.Wbuf, src = self.W_cl.data)
+                
+                self.merge_pixels(t, r)
+        self.allgather()
         
-        self.overlap2[self.overlap1 == 0] = 1
+
+    def allgather(self):
+        self.Wsums    = comm.allreduce(self.Wsums)
+        self.I[:]     = comm.allreduce(self.I)
+        self.overlap2 = comm.allreduce(self.overlap2)
+
+        self.test1 = self.I.copy()
+        self.test2 = self.overlap2.copy()
+        
+        self.overlap2[self.overlap2 <= 1e-20] = 1
         self.I /= self.overlap2
 
 class Update_w():
@@ -333,6 +352,7 @@ class Update_w():
         frames = P.shape[0]
         self.dstart = list(range(0, frames, frame_chunk_size))
         self.dstop  = list(range(frame_chunk_size, frames, frame_chunk_size)) + [frames]
+
 
         # calculate c[d] = sum_tr P[d, t, r] sum_i W[t, r, i]
         self.c = np.sum(P * Wsums, axis=(1,2))
@@ -397,7 +417,8 @@ class Update_w():
         
  
     def update(self):
-        for dstart, dstop in tqdm(zip(self.dstart, self.dstop), total = len(self.dstart), desc='updating fluence estimates'):
+        if not silent : print()
+        for dstart, dstop in tqdm(zip(self.dstart, self.dstop), total = len(self.dstart), desc='updating fluence estimates', disable = silent):
             frames = np.int32(dstop-dstart)
             self.load_frame_chunk(dstart, dstop)
             
@@ -472,7 +493,7 @@ class Update_b():
     
     def update(self):
         cw = self.cw
-        for dstart, dstop in tqdm(zip(cw.dstart, cw.dstop), total = len(cw.dstart), desc='updating background weights'):
+        for dstart, dstop in tqdm(zip(cw.dstart, cw.dstop), total = len(cw.dstart), desc='updating background weights', disable = silent):
             frames = np.int32(dstop-dstart)
             cw.load_frame_chunk(dstart, dstop)
             
