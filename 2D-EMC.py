@@ -86,9 +86,9 @@ for i in range(iteration, iteration + config['iters']):
     cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
     cw.update()
     
-    cb = utils_cl.Update_b(B, Ksums, cw)
-    cb.update()
-    del cb; del cw
+    #cb = utils_cl.Update_b(B, Ksums, cw)
+    #cb.update()
+    #del cb; del cw
 
     # Save
     # ----

@@ -209,7 +209,7 @@ class Update_W():
         P-sparsity...
     """
     
-    def __init__(self, w, I, b, B, P, K, C, R, xyz, dx, pixel_chunk_size, minval = 1e-15, iters = 4):
+    def __init__(self, w, I, b, B, P, K, C, R, xyz, dx, pixel_chunk_size, minval = 1e-10, iters = 4):
         # split pixels by MPI rank
         pixels = B.shape[-1]
         self.i_s = i_s = np.linspace(0, pixels, size + 1).astype(int)
@@ -224,7 +224,8 @@ class Update_W():
         self.R         = R
         self.i0        = I.shape[-1] // 2
         self.dx        = dx
-
+        self.minval    = minval
+        
         self.rx = np.ascontiguousarray(xyz[0, istart:istop].astype(np.float32))
         self.ry = np.ascontiguousarray(xyz[1, istart:istop].astype(np.float32))
 
@@ -307,6 +308,7 @@ class Update_W():
         
         self.overlap2[self.overlap2 <= 1e-20] = 1
         self.I /= self.overlap2
+        np.clip(self.I, self.minval, None, self.I)
 
 class Update_w():
     """
@@ -348,18 +350,18 @@ class Update_w():
             g[d] -= PK / T^2
     """
     def __init__(self, Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frame_chunk_size, iters):
-        # get frame chunks
+        # split frames by MPI rank
         frames = P.shape[0]
-        self.dstart = list(range(0, frames, frame_chunk_size))
-        self.dstop  = list(range(frame_chunk_size, frames, frame_chunk_size)) + [frames]
-
-
+        self.ds = ds = np.linspace(0, frames, size + 1).astype(int)
+        self.dstart = dstart = ds[:-1:][rank]
+        self.dstop  = dstop  = ds[1::][rank]
+        
         # calculate c[d] = sum_tr P[d, t, r] sum_i W[t, r, i]
-        self.c = np.sum(P * Wsums, axis=(1,2))
-
+        self.c = np.sum(P[dstart:dstop] * Wsums, axis=(1,2))
+        
         # calculate xmax[d] = sum_i K[d, i] / c[d]
-        self.xmax = Ksums.astype(np.float32) / self.c
-
+        self.xmax = Ksums[dstart: dstop].astype(np.float32) / self.c
+        
         self.i0 = np.float32(I.shape[-1] // 2)
         self.dx = np.float32(dx)
         self.w = w
@@ -368,24 +370,24 @@ class Update_w():
         self.K = K
         
         self.iters  = np.int32(iters)
-        frames      = self.frames    = np.int32(P.shape[0])
+        self.frames = frames         = np.int32(self.dstop - self.dstart)
         classes     = self.classes   = np.int32(P.shape[1])
         rotations   = self.rotations = np.int32(P.shape[2])
         pixels      = self.pixels    = np.int32(B.shape[-1])
         
         # initialise gpu arrays
-        self.P_cl  = cl.array.zeros(queue, (classes, rotations, frame_chunk_size), dtype = np.float32)
-        self.w_cl  = cl.array.empty(queue, (frame_chunk_size,)                   , dtype = np.float32)
-        self.I_cl  = cl.array.empty(queue, I.shape                               , dtype = np.float32)
-        self.b_cl  = cl.array.empty(queue, (frame_chunk_size,)                   , dtype = np.float32)
-        self.B_cl  = cl.array.empty(queue, B.shape                               , dtype = np.float32)
-        self.K_cl  = cl.array.empty(queue, (pixels, frame_chunk_size)            , dtype = np.uint8)
-        self.C_cl  = cl.array.empty(queue, C.shape                               , dtype = np.float32)
-        self.R_cl  = cl.array.empty(queue, R.shape                               , dtype = np.float32)
-        self.rx_cl   = cl.array.empty(queue, xyz[0].shape                        , dtype = np.float32)
-        self.ry_cl   = cl.array.empty(queue, xyz[1].shape                        , dtype = np.float32)
-        self.c_cl    = cl.array.empty(queue, (frame_chunk_size,)                 , dtype = np.float32)
-        self.xmax_cl = cl.array.empty(queue, (frame_chunk_size,)                 , dtype = np.float32)
+        self.P_cl  = cl.array.zeros(queue, (classes, rotations, frames), dtype = np.float32)
+        self.w_cl  = cl.array.empty(queue, (frames,)                   , dtype = np.float32)
+        self.I_cl  = cl.array.empty(queue, I.shape                     , dtype = np.float32)
+        self.b_cl  = cl.array.empty(queue, (frames,)                   , dtype = np.float32)
+        self.B_cl  = cl.array.empty(queue, B.shape                     , dtype = np.float32)
+        self.K_cl  = cl.array.empty(queue, (pixels, frames)            , dtype = np.uint8)
+        self.C_cl  = cl.array.empty(queue, C.shape                     , dtype = np.float32)
+        self.R_cl  = cl.array.empty(queue, R.shape                     , dtype = np.float32)
+        self.rx_cl   = cl.array.empty(queue, xyz[0].shape              , dtype = np.float32)
+        self.ry_cl   = cl.array.empty(queue, xyz[1].shape              , dtype = np.float32)
+        self.c_cl    = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
+        self.xmax_cl = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
         
         # load arrays to gpu
         cl.enqueue_copy(queue, self.B_cl.data, B)
@@ -393,6 +395,15 @@ class Update_w():
         cl.enqueue_copy(queue, self.R_cl.data, R)
         cl.enqueue_copy(queue, self.rx_cl.data, np.ascontiguousarray(xyz[0].astype(np.float32)))
         cl.enqueue_copy(queue, self.ry_cl.data, np.ascontiguousarray(xyz[1].astype(np.float32)))
+
+        K_in = np.ascontiguousarray(self.K[dstart:dstop, :].T)
+        P_in = np.ascontiguousarray(np.transpose(self.P[dstart:dstop], (1, 2, 0)))
+        cl.enqueue_copy(queue, dest = self.w_cl.data, src = self.w[dstart:dstop])
+        cl.enqueue_copy(queue, dest = self.b_cl.data, src = self.b[dstart:dstop])
+        cl.enqueue_copy(queue, dest = self.K_cl.data, src = K_in)
+        cl.enqueue_copy(queue, dest = self.P_cl.data, src = P_in)
+        cl.enqueue_copy(queue, dest = self.c_cl.data, src = self.c)
+        cl.enqueue_copy(queue, dest = self.xmax_cl.data, src = self.xmax)
         
         # copy I as an opencl "image" for bilinear sampling
         shape        = I.shape
@@ -404,25 +415,10 @@ class Update_w():
         cl.enqueue_copy(queue, dest = self.I_cl, src = I, 
                         origin = (0, 0, 0), region = shape[::-1])
 
-    def load_frame_chunk(self, dstart, dstop):
-        K_in = np.ascontiguousarray(self.K[dstart:dstop, :].T)
-        P_in = np.ascontiguousarray(np.transpose(self.P[dstart:dstop], (1, 2, 0)))
-        
-        cl.enqueue_copy(queue, dest = self.w_cl.data, src = self.w[dstart:dstop])
-        cl.enqueue_copy(queue, dest = self.b_cl.data, src = self.b[dstart:dstop])
-        cl.enqueue_copy(queue, dest = self.K_cl.data, src = K_in)
-        cl.enqueue_copy(queue, dest = self.P_cl.data, src = P_in)
-        cl.enqueue_copy(queue, dest = self.c_cl.data, src = self.c[dstart:dstop])
-        cl.enqueue_copy(queue, dest = self.xmax_cl.data, src = self.xmax[dstart:dstop])
-        
- 
     def update(self):
         if not silent : print()
-        for dstart, dstop in tqdm(zip(self.dstart, self.dstop), total = len(self.dstart), desc='updating fluence estimates', disable = silent):
-            frames = np.int32(dstop-dstart)
-            self.load_frame_chunk(dstart, dstop)
-            
-            cl_code.update_w(queue, (frames,), None, 
+        for i in tqdm(range(1), desc=f'updating fluence estimates for {self.frames} frames', disable = silent):
+            cl_code.update_w(queue, (self.frames,), None, 
                              self.I_cl, self.B_cl.data, 
                              self.w_cl.data, self.b_cl.data,
                              self.K_cl.data, self.P_cl.data,
@@ -430,11 +426,22 @@ class Update_w():
                              self.C_cl.data, self.R_cl.data, 
                              self.rx_cl.data, self.ry_cl.data,
                              self.i0, self.dx, self.iters, 
-                             frames, self.classes,  
+                             self.frames, self.classes,  
                              self.rotations, self.pixels)
                                  
-            cl.enqueue_copy(queue, dest = self.w[dstart:dstop], src = self.w_cl.data)
+            cl.enqueue_copy(queue, dest = self.w[self.dstart: self.dstop], src = self.w_cl.data)
+        
+        self.allgather()
 
+    def allgather(self):
+        print(rank, 'update_w allgather')
+        sys.stdout.flush()
+        for r in range(size):
+            dstart = self.ds[:-1:][r]
+            dstop  = self.ds[1::][r]
+            print(rank, r, dstart, dstop)
+            sys.stdout.flush()
+            self.w[dstart: dstop] = comm.bcast(self.w[dstart: dstop], root=r)
 
 class Update_b():
     """
@@ -484,8 +491,8 @@ class Update_b():
         self.c = np.float32(np.sum(B))
         
         # calculate xmax[d]
-        xmax = Ksums.astype(np.float32) / self.c
-
+        xmax = Ksums[cw.dstart: cw.dstop].astype(np.float32) / self.c
+        
         # replace xmax
         cw.xmax = xmax
         
@@ -493,10 +500,9 @@ class Update_b():
     
     def update(self):
         cw = self.cw
-        for dstart, dstop in tqdm(zip(cw.dstart, cw.dstop), total = len(cw.dstart), desc='updating background weights', disable = silent):
-            frames = np.int32(dstop-dstart)
-            cw.load_frame_chunk(dstart, dstop)
-            
+        frames = cw.frames
+        if not silent : print()
+        for i in tqdm(range(1), desc=f'updating background weights for {cw.frames} frames', disable = silent):
             cl_code.update_b(queue, (frames,), None, 
                              cw.I_cl, cw.B_cl.data, 
                              cw.w_cl.data, cw.b_cl.data,
@@ -509,4 +515,11 @@ class Update_b():
                              cw.rotations, cw.pixels)
                                  
             # will this update the original b?
-            cl.enqueue_copy(queue, dest = cw.b[dstart:dstop], src = cw.b_cl.data)
+            cl.enqueue_copy(queue, dest = cw.b[cw.dstart: cw.dstop], src = cw.b_cl.data)
+
+    def allgather(self):
+        cw = self.cw
+        for r in range(size):
+            dstart = cw.ds[:-1:][r]
+            dstop  = cw.ds[1::][r]
+            cw.b[dstart: dstop] = comm.bcast(cw.b[dstart: dstop], root=r)
