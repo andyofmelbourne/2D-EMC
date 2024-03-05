@@ -66,8 +66,7 @@ my_frames = list(range(rank, frames, size))
 
 W    = np.empty((classes, rotations, pixels))
 
-#for i in range(iteration, iteration + config['iters']): 
-for i in range(1):
+for i in range(iteration, iteration + config['iters']): 
     beta = config['betas'][min(config['iters']-1, i)]
     
     # Probability matrix
@@ -84,7 +83,7 @@ for i in range(1):
     del cW
     
     # this will only help next iteration
-    cw = utils_cl.Update_w_test2(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
     cw.update()
     del cw
     
