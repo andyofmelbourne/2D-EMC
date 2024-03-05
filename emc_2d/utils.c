@@ -259,7 +259,6 @@ local float g[256];
 local float x ;
 
 
-// I wonder if these should be local arrays?
 x      = w[d];
 b_l    = b[d];
 xmax_l = xmax[d];
@@ -293,10 +292,9 @@ for (iter=0; iter<iters; iter++){
         
         T = x + B_l / (C_l * W.x);
         
-        PK      = P[t * rotations * frames + r * frames + d] * K_l;
+        PK      = P[d * rotations * classes + t * rotations + r] * K_l;
         f[wid] += PK / T ;
         g[wid] -= PK / (T*T) ;
-        //printf("%d %.2e %.2e %d %.2e %.2e %.2e \n", iter, ry_l, rx_l, K_l, P[t * rotations * frames + r * frames + d],  T, W.x);
     }}}
     
     // work group reduce
@@ -320,8 +318,6 @@ if (wid == 0) w[d] = x;
 }
 
 
-
-
 kernel void update_b(
 image2d_array_t I, 
 global float* B, 
@@ -329,72 +325,92 @@ global float* w,
 global float* b, 
 global unsigned char* K, 
 global float* P, 
-const  float  c, 
+const float c, 
 global float* xmax, 
-global float* C, 
-global float* R, 
-global float* rx, 
-global float* ry, 
-const float i0, 
-const float dx, 
 const int   iters, 
 const int   frames, 
 const int   classes,
 const int   rotations,
-const int   pixels
+const int   pixels,
+const int   d,
+global float* C, 
+global float* R, 
+global float* rx, 
+global float* ry, 
+const float i0,
+const float dx
 )
 {
 
-int d = get_global_id(0);
+//int d    = get_group_id(0);
+int wid  = get_local_id(0);
+int size = get_local_size(0);
 
 
-int i, r, t, iter;
-float x, w_l, xmax_l, f, g, T, step, PK;
+int i, t, r, iter;
+float c_l, w_l, xmax_l, T, step, PK;
+unsigned char K_l;
 
-float4 coord ;
-float4 W;
+local float f[256];
+local float g[256];
 
-// I wonder if these should be local arrays?
+local float x ;
+
+
 x      = b[d];
 w_l    = w[d];
 xmax_l = xmax[d];
 
-float B_l, rx_l, ry_l;
-unsigned char K_l;
+float B_l;
+float fsum, gsum;
+
+float4 coord ;
+float4 W;
+float rx_l, ry_l;
 
 for (iter=0; iter<iters; iter++){
-    f = 0.;
-    g = 0.;
-    for (i=0; i<pixels; i++){
+    f[wid] = 0.;
+    g[wid] = 0.;
+    for (i=wid; i<pixels; i+=size){
+        B_l  = w_l * C[i] / B[i] ;
+        K_l  = K[i];
         rx_l = rx[i];
         ry_l = ry[i];
-        B_l  = w_l * C[i] / B[i];
-        K_l  = K[i * frames + d];
     
     for (r=0; r<rotations; r++){
         coord.y = i0 + (R[4*r + 0] * rx_l + R[4*r + 1] * ry_l) / dx + 0.5;
         coord.x = i0 + (R[4*r + 2] * rx_l + R[4*r + 3] * ry_l) / dx + 0.5;
-        
+    
     for (t=0; t<classes; t++){
         coord.z = t ;
         
         W = read_imagef(I, trilinear, coord);
         
-        // T    = b + w C W[t, r, i] / B[i] 
-        T = x + B_l * W.x;
+        T = x + B_l * W.x ;
         
-        PK = P[t * rotations * frames + r * frames + d] * K_l;
-        f += PK / T ;
-        g -= PK / (T*T) ;
+        PK      = P[d * rotations * classes + t * rotations + r] * K_l;
+        f[wid] += PK / T ;
+        g[wid] -= PK / (T*T) ;
     }}}
-
-    step = f / g * (1 - f / c);
     
-    x += step;
-    x = clamp(x, (float)1e-8, xmax_l) ;
+    // work group reduce
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (wid == 0) {
+        fsum = 0 ;
+        gsum = 0 ;
+        for (i=0; i<size; i++) {
+            fsum += f[i];
+            gsum += g[i];
+        }
+    step = fsum / gsum * (1 - fsum / c);
+    x   += step;
+    x    = clamp(x, (float)1e-8, xmax_l) ;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    
 }
 
-b[d] = x;
+if (wid == 0) b[d] = x;
 }
 
 

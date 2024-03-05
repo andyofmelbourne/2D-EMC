@@ -5,8 +5,8 @@ data = []
 for i in range(87, 96):
     data.append(PREFIX + f'hits_r00{i}.cxi')
 
-classes            = 3
-rotations          = 256
+classes            = 32
+rotations          = 64
 sampling           = 4
 model_length       = 64
 background_classes = 1
@@ -24,7 +24,8 @@ dtype              = np.float32
 tol_P = 1e-2
 
 iters = 3
-update_b = np.zeros((iters,), dtype=bool)
+update_b = np.ones((iters,), dtype=bool)
+update_b[0] = False
 update_B = np.zeros((iters,), dtype=bool)
 betas = iters*[0.001]
 #beta_start = 0.001

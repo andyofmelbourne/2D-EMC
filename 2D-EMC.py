@@ -55,7 +55,7 @@ xyz = comm.bcast(xyz, root=0)
 Ksums = np.sum(K, axis=1)
 
 minval = 1e-10
-iters  = 4
+iters  = 6
 i0     = J // 2
 
 # split classes by rank
@@ -67,13 +67,15 @@ my_frames = list(range(rank, frames, size))
 W    = np.empty((classes, rotations, pixels))
 
 for i in range(iteration, iteration + config['iters']): 
-    beta = config['betas'][min(config['iters']-1, i)]
+    beta     = config['betas'][min(config['iters']-1, i)]
+    update_b = config['update_b'][min(config['iters']-1, i)]
     
     # Probability matrix
     # ------------------
     c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     del c
+    if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
     # Maximise + Compress
     # -------------------
@@ -81,16 +83,21 @@ for i in range(iteration, iteration + config['iters']):
     cW.update()
     Wsums = cW.Wsums.copy()
     del cW
+
+    #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
+    #expectation_value, log_likihood = c.calculate()
+    #del c
+    #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
-    # this will only help next iteration
     cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
     cw.update()
-    del cw
     
-    #sys.exit()
-    #cb = utils_cl.Update_b(B, Ksums, cw)
-    #cb.update()
-    #del cb; del cw
+    if update_b :
+        cb = utils_cl.Update_b(B, Ksums, cw)
+        cb.update()
+        del cb
+
+    del cw
 
     # Save
     # ----

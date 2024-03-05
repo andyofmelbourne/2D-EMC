@@ -332,7 +332,7 @@ class Update_w():
         
         # calculate xmax[d] = sum_i K[d, i] / c[d]
         self.xmax = Ksums[dstart: dstop].astype(np.float32) / self.c
-        
+
         self.i0 = np.float32(I.shape[-1] // 2)
         self.dx = np.float32(dx)
         self.w = w
@@ -360,12 +360,12 @@ class Update_w():
         self.b_cl  = cl.array.empty(queue, (frames,)                   , dtype = np.float32)
         self.C_cl  = cl.array.empty(queue, C.shape                     , dtype = np.float32)
         self.R_cl  = cl.array.empty(queue, R.shape                     , dtype = np.float32)
-        self.c_cl    = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
-        self.xmax_cl = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
-        self.W_cl    = cl.array.empty(queue, (classes, rotations, pixels), dtype = np.float32)
+        self.c_cl     = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
+        self.xmax_cl  = cl.array.empty(queue, (frames,)                 , dtype = np.float32)
+        self.W_cl     = cl.array.empty(queue, (classes, rotations, pixels), dtype = np.float32)
         
         
-        self.groups = 16
+        self.groups = 8
         self.B_cl = []
         self.K_cl = [] 
         self.W_sub_cl = []
@@ -408,8 +408,8 @@ class Update_w():
         queue2 = cl.CommandQueue(context, properties=cl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE)
         
         for d in tqdm(np.arange(self.frames, dtype=np.int32), desc=f'updating fluence estimates for {self.frames} frames', disable = silent):
-            inds = np.where(self.K[d] > 0)[0]
-            K    = self.K[d][inds]
+            inds = np.where(self.K[self.dstart + d] > 0)[0]
+            K    = self.K[self.dstart + d][inds]
             pixels = np.int32(len(inds))
             
             index = d % self.groups
@@ -435,7 +435,7 @@ class Update_w():
                              self.C_cl[index].data, self.R_cl.data, 
                              self.rx_cl[index].data, self.ry_cl[index].data, self.i0, self.dx, 
                              wait_for = copy_events)
-        
+             
         queue2.finish()
 
         cl.enqueue_copy(queue, dest = self.w[self.dstart: self.dstop], src = self.w_cl.data)
@@ -443,11 +443,9 @@ class Update_w():
         self.allgather()
 
     def allgather(self):
-        sys.stdout.flush()
         for r in range(size):
             dstart = self.ds[:-1:][r]
             dstop  = self.ds[1::][r]
-            sys.stdout.flush()
             self.w[dstart: dstop] = comm.bcast(self.w[dstart: dstop], root=r)
 
 
@@ -497,34 +495,59 @@ class Update_b():
     """
     def __init__(self, B, Ksums, cw):
         # calculate c
-        self.c = np.float32(np.sum(B))
+        cw.c   = np.float32(np.sum(B))
         
         # calculate xmax[d]
-        xmax = Ksums[cw.dstart: cw.dstop].astype(np.float32) / self.c
+        xmax = Ksums[cw.dstart: cw.dstop].astype(np.float32) / cw.c
         
         # replace xmax
         cw.xmax = xmax
+        cl.enqueue_copy(queue, dest = cw.xmax_cl.data, src = xmax)
         
         self.cw = cw
     
-    def update(self):
-        cw = self.cw
-        frames = cw.frames
+    def update(s):
+        self = s.cw   
         if not silent : print()
-        for i in tqdm(range(1), desc=f'updating background weights for {cw.frames} frames', disable = silent):
-            cl_code.update_b(queue, (frames,), None, 
-                             cw.I_cl, cw.B_cl.data, 
-                             cw.w_cl.data, cw.b_cl.data,
-                             cw.K_cl.data, cw.P_cl.data,
-                             self.c, cw.xmax_cl.data, 
-                             cw.C_cl.data, cw.R_cl.data, 
-                             cw.rx_cl.data, cw.ry_cl.data,
-                             cw.i0, cw.dx, cw.iters, 
-                             frames, cw.classes,  
-                             cw.rotations, cw.pixels)
-                                 
-            # will this update the original b?
-            cl.enqueue_copy(queue, dest = cw.b[cw.dstart: cw.dstop], src = cw.b_cl.data)
+        events      = self.groups * [1,]
+        copy_events = 5 * [1,]
+        
+        # need an out-of-order queue
+        queue2 = cl.CommandQueue(context, properties=cl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE)
+        
+        for d in tqdm(np.arange(self.frames, dtype=np.int32), desc=f'updating fluence estimates for {self.frames} frames', disable = silent):
+            inds = np.where(self.K[self.dstart + d] > 0)[0]
+            K    = self.K[self.dstart + d][inds]
+            pixels = np.int32(len(inds))
+            
+            index = d % self.groups
+            
+            # wait for last execution of index to finish
+            if d > self.groups : events[index].wait()
+            
+            # send W, K, B to gpu
+            copy_events[0] = cl.enqueue_copy(queue2, dest = self.K_cl[index].data, src = np.ascontiguousarray(K), is_blocking = False)
+            copy_events[1] = cl.enqueue_copy(queue2, dest = self.B_cl[index].data, src = np.ascontiguousarray(self.B[0, inds]), is_blocking = False)
+            copy_events[2] = cl.enqueue_copy(queue2, dest = self.rx_cl[index].data, src = np.ascontiguousarray(self.rx[inds]), is_blocking = False)
+            copy_events[3] = cl.enqueue_copy(queue2, dest = self.ry_cl[index].data, src = np.ascontiguousarray(self.ry[inds]), is_blocking = False)
+            copy_events[4] = cl.enqueue_copy(queue2, dest = self.C_cl[index].data, src = np.ascontiguousarray(self.C[inds]), is_blocking = False)
+            
+            events[index] = cl_code.update_b(queue2, (256,), (256,), 
+                             self.I_cl, self.B_cl[index].data, 
+                             self.w_cl.data, self.b_cl.data,
+                             self.K_cl[index].data, self.P_cl.data,
+                             self.c, self.xmax_cl.data, 
+                             self.iters, self.frames, self.classes,  
+                             self.rotations, pixels, d, 
+                             self.C_cl[index].data, self.R_cl.data, 
+                             self.rx_cl[index].data, self.ry_cl[index].data, self.i0, self.dx, 
+                             wait_for = copy_events)
+        
+        queue2.finish()
+
+        cl.enqueue_copy(queue, dest = self.b[self.dstart: self.dstop], src = self.b_cl.data)
+        
+        s.allgather()
 
     def allgather(self):
         cw = self.cw
