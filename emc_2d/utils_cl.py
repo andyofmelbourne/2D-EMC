@@ -123,7 +123,9 @@ class Prob():
                     self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
                     self.rx_cl.data, self.ry_cl.data,
                     self.beta, self.i0, self.dx, self.pixels, self.frames)
-            cl.enqueue_copy(queue, dest = logR[self.dstart: self.dstop], src=self.LR_cl.data)
+            queue.finish()
+        
+        cl.enqueue_copy(queue, dest = logR[self.dstart: self.dstop], src=self.LR_cl.data)
         
         self.expectation_value = 0.
         self.log_likihood      = 0.

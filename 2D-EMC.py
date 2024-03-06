@@ -38,21 +38,30 @@ J                          = I.shape[1]
 
 # load data
 if rank == 0 :
-    with h5py.File(sys.argv[1] + '/data.cxi') as f:
-        xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
-        data = f['entry_1/data_1/data']
-        indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
-        frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
-        K = np.zeros((frames, pixels), dtype = data.dtype)
-        for d in tqdm(range(1), desc = 'loading data'):
-            data.read_direct(K, np.s_[:], np.s_[:])
+    for d in tqdm(range(1), desc = 'loading data'):
+        with h5py.File(sys.argv[1] + '/data.cxi') as f:
+            xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
+            litpix = np.cumsum(f['entry_1/data_1/litpix'])[:-1]
+            K      = np.split(f['entry_1/data_1/data'][()], litpix)
+            inds   = np.split(f['entry_1/data_1/inds'][()], litpix)
+            Ksums  = f['entry_1/data_1/photons'][()]
+            indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
+            frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
+            #K = np.zeros((frames, pixels), dtype = data.dtype)
+            #for d in tqdm(range(1), desc = 'loading data'):
+            #    data.read_direct(K, np.s_[:], np.s_[:])
 else :
-    K = xyz = None
+    K = xyz = inds = Ksums = None
 
-K   = comm.bcast(K, root=0)
-xyz = comm.bcast(xyz, root=0)
+K     = comm.bcast(K, root=0)
+inds  = comm.bcast(inds, root=0)
+Ksums = comm.bcast(Ksums, root=0)
+xyz   = comm.bcast(xyz, root=0)
 
-Ksums = np.sum(K, axis=1)
+# make dense K for testing
+K_dense = np.zeros((frames, pixels), dtype = K[0].dtype)
+for d in range(frames):
+    K_dense[d, inds[d]] = K[d]
 
 minval = 1e-10
 iters  = 6
@@ -72,14 +81,14 @@ for i in range(iteration, iteration + config['iters']):
     
     # Probability matrix
     # ------------------
-    c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P, xyz, dx, beta)
+    c = utils_cl.Prob(C, R, K_dense, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     del c
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
     # Maximise + Compress
     # -------------------
-    cW = utils_cl.Update_W(w, I, b, B, P, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
+    cW = utils_cl.Update_W(w, I, b, B, P, K_dense, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
     cW.update()
     Wsums = cW.Wsums.copy()
     del cW
@@ -89,7 +98,7 @@ for i in range(iteration, iteration + config['iters']):
     #del c
     #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
-    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K, C, R, dx, xyz, frames, iters)
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K_dense, C, R, dx, xyz, frames, iters)
     cw.update()
     
     if update_b :

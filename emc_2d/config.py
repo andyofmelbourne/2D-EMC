@@ -5,7 +5,7 @@ data = []
 for i in range(87, 96):
     data.append(PREFIX + f'hits_r00{i}.cxi')
 
-classes            = 64
+classes            = 16
 rotations          = 64
 sampling           = 4
 model_length       = 64

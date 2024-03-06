@@ -135,24 +135,42 @@ file_metadata['frames'] = number_of_frames
 
 pixels = out_shape = (np.sum(mask),)
 
+# write sparse photons (data) to file (dimension = 1)
+# write photon locations (inds) to file (dimension = 1)
+# write number of photons (photons) to file (dimension = number of frames)
 if write_output :
     frame_index = 0
+    photon_index = 0
     with h5py.File(output, 'a') as g:
-        data = g.create_dataset('entry_1/data_1/data', 
-                                (number_of_frames,) + out_shape,  
-                                dtype = data_dtype, 
-                                compression='gzip',
-                                compression_opts = 1)
         
+        # assume all data fits in memory
+        # writing and resizing on individual frames is too expensive (memory + time)
+        inds_fnam = []
+        data_fnam = []
+        photons_fnam = []
+        litpix_fnam = []
         for fnam in frames :
-            
             with h5py.File(fnam, 'r') as f:
                 data_file = f['entry_1/data_1/data']
-                
-                for d in tqdm(frames[fnam], desc = fnam):
-                    frame             = data_file[d][mask] 
-                    data[frame_index] = frame
-                    frame_index      += 1
+            
+                for d in tqdm(frames[fnam], desc=f'loading data: {fnam}'):
+                    frame = data_file[d][mask]
+                    inds_fnam.append(np.where(frame>0)[0])
+                    data_fnam.append(frame[inds_fnam[-1]])
+                    photons_fnam.append(np.sum(data_fnam[-1]))
+                    litpix_fnam.append(len(inds_fnam[-1]))
+    
+            litpix_fnam  = np.array(litpix_fnam)
+            inds_fnam    = np.concatenate(inds_fnam)
+            data_fnam    = np.concatenate(data_fnam)
+            photons_fnam = np.array(photons_fnam)
+
+        print()
+        print(f'writing sparse photons to {output}')
+        g['entry_1/data_1/data'] = data_fnam
+        g['entry_1/data_1/inds'] = inds_fnam
+        g['entry_1/data_1/photons'] = photons_fnam
+        g['entry_1/data_1/litpix'] = litpix_fnam
 
 
 J         = config['model_length']
