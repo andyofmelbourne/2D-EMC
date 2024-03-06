@@ -5,12 +5,12 @@ data = []
 for i in range(87, 96):
     data.append(PREFIX + f'hits_r00{i}.cxi')
 
-classes            = 32
+classes            = 64
 rotations          = 64
 sampling           = 4
 model_length       = 64
 background_classes = 1
-max_frames         = 256
+max_frames         = 8192
 #frame_shape        = (16, 128, 512)
 #frame_slice        = np.s_[:, :, :]
 #imshow             = lambda x: x[frame_slice]

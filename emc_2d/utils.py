@@ -533,7 +533,11 @@ def make_W_ims(W, pixel_indices, frame_shape):
         for r in range(rotations):
             ims[c, r].ravel()[pixel_indices] = W[c, r]
     
-    # show C
-    #C_im = np.zeros(shape_2d)
-    #C_im[mask[s]] = C
+    return ims
+
+def make_K_ims(K, pixel_indices, frame_shape):
+    ims = np.zeros((K.shape[0],) + frame_shape, dtype = np.uint8)
+    for d in range(K.shape[0]):
+        ims[d].ravel()[pixel_indices] = K[d]
+    
     return ims
