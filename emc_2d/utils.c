@@ -1,70 +1,178 @@
 constant sampler_t trilinear = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_LINEAR ;
+constant sampler_t nearest = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST ;
 
+
+__kernel void calculate_LR2 (
+    image2d_array_t I, 
+    global float *LR,  
+    global unsigned char *K, 
+    global float *w,
+    global float *b, 
+    global float *B, 
+    global float *C, 
+    global float *R, 
+    global float *rx, 
+    global float *ry, 
+    const float beta, 
+    const float i0,
+    const float dx,
+    const int pixels, 
+    const int d0)
+{
+    int Kindex   = get_global_id(2);
+    int class    = get_global_id(1);
+    int rotation = get_global_id(0);
+    
+    int frames    = get_global_size(2);
+    int classes   = get_global_size(1);
+    int rotations = get_global_size(0);
+        
+    int frame = d0 + Kindex;
+
+    //int g0 = get_num_groups(0);
+    //int g1 = get_num_groups(1);
+    //int g2 = get_num_groups(2);
+    //
+    //int w0 = get_local_size(0);
+    //int w1 = get_local_size(1);
+    //int w2 = get_local_size(2);
+    //printf("%d %d %d %d %d %d \n", g0, g1, g2, w0, w1, w2);
+    //printf("%d %d %d %d %d %d \n", rotations, classes, frames, rotation, class, Kindex);
+    
+    float R_l[4];
+    float T;
+    float logR = 0.;
+    
+    int i;
+    
+    for (i=0; i<4; i++) {
+        R_l[i] = R[4*rotation + i];
+    }
+
+    float4 coord ;
+    float4 W;
+
+    coord.z = class ;
+
+    for (i=0; i<pixels; i++) {
+        coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
+        coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
+        
+        W = read_imagef(I, trilinear, coord);
+        
+        T = w[frame] * C[i] * W.x + b[frame] * B[i];
+        logR += K[pixels * Kindex + i] * log(T) - T ;
+    }
+
+    LR[rotations * classes * frame + rotations * class + rotation] = beta * logR;
+}
 
 // T[i, t, r]    = w[d] W[i, t, r] + b[d] B[i]
 // logR[d, t, r] = beta sum_i K[i, d] log T[i, t, r] - T[i, t, r]
 
 __kernel void calculate_LR (
-image2d_array_t I, 
-global float *LR,  
-global unsigned char *K, 
-global float *w,
-global float *b, 
-global float *B, 
-global float *C, 
-global float *R, 
-global float *rx, 
-global float *ry, 
-const float beta, 
-const float i0,
-const float dx,
-const int pixels, 
-const int frames)
+    image2d_array_t I, 
+    global float *LR,  
+    global unsigned char *K, 
+    global float *w,
+    global float *b, 
+    global float *B, 
+    global float *C, 
+    global float *R, 
+    global float *rx, 
+    global float *ry, 
+    const float beta, 
+    const float i0,
+    const float dx,
+    const int pixels, 
+    const int frames)
 {
-int frame = get_global_id(0);
-int class = get_global_id(1);
-int rotation = get_global_id(2);
+    int frame = get_global_id(0);
+    int class = get_global_id(1);
+    int rotation = get_global_id(2);
+    
+    //int frames = get_global_size(0);
+    int classes = get_global_size(1);
+    int rotations = get_global_size(2);
 
+    float R_l[4];
+    float T;
+    float logR = 0.;
 
-//int frames = get_global_size(0);
-int classes = get_global_size(1);
-int rotations = get_global_size(2);
+    int i;
 
-float R_l[4];
-float T;
-float logR = 0.;
+    for (i=0; i<4; i++) {
+        R_l[i] = R[4*rotation + i];
+    }
 
-int i;
+    float4 coord ;
+    float4 W;
 
-//int g0 = get_num_groups(0);
-//int g1 = get_num_groups(1);
-//int g2 = get_num_groups(2);
-//
-//int w0 = get_local_size(0);
-//int w1 = get_local_size(1);
-//int w2 = get_local_size(2);
-//printf("%d %d %d %d %d %d\n", w0, w1, w2, g0, g1, g2);
+    coord.z = class ;
 
-for (i=0; i<4; i++) {
-    R_l[i] = R[4*rotation + i];
+    for (i=0; i<pixels; i++) {
+        coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
+        coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
+        
+        W = read_imagef(I, trilinear, coord);
+        
+        T = w[frame] * C[i] * W.x + b[frame] * B[i];
+        logR += K[frames * i + frame] * log(T) - T ;
+    }
+
+    LR[rotations * classes * frame + rotations * class + rotation] = beta * logR;
 }
 
-float4 coord ;
-float4 W;
 
-coord.z = class ;
 
-for (i=0; i<pixels; i++) {
-    coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
-    coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
+
+
+
+// Wsums[t, r] = sum_i W[t, r, i] 
+//             = sum_i C[i] I[i(t, r, i)]
+__kernel void calculate_tomogram_sums (
+    global float *Wsums,
+    image2d_array_t I, 
+    global float *C, 
+    global float *R, 
+    global float *rx, 
+    global float *ry, 
+    const float i0,
+    const float dx,
+    const int pixels)
+{
+    int class = get_global_id(0);
+    int rotation = get_global_id(1);
+
+    int classes = get_global_size(0);
+    int rotations = get_global_size(1);
+
+    float R_l[4];
+    float T;
     
-    W = read_imagef(I, trilinear, coord);
+    int i;
     
-    T = w[frame] * C[i] * W.x + b[frame] * B[i];
-    logR += K[frames * i + frame] * log(T) - T ;
-}
+    for (i=0; i<4; i++) {
+        R_l[i] = R[4*rotation + i];
+    }
 
-LR[rotations * classes * frame + rotations * class + rotation] = beta * logR;
+    float4 coord ;
+    float4 W;
+
+    coord.z = class ;
+
+    T = 0.;
+    for (i=0; i<pixels; i++) {
+        coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
+        coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
+        
+        W = read_imagef(I, trilinear, coord);
+        
+        T += C[i] * W.x;
+    }
+    
+    // may not be coallesed write (but not big so don't worry)
+    Wsums[rotations * class + rotation] = T;
 }
 
 
@@ -413,4 +521,14 @@ for (iter=0; iter<iters; iter++){
 if (wid == 0) b[d] = x;
 }
 
+kernel void test_1d_image(
+    image1d_t I, 
+    global int* out)
+{
+    int i = get_global_id(0);
+    
+    int4 v ;
 
+    v = read_imagei(I, i);
+    out[i] = v.x;
+}

@@ -168,9 +168,9 @@ if write_output :
         print()
         print(f'writing sparse photons to {output}')
         g['entry_1/data_1/data'] = data_fnam
-        g['entry_1/data_1/inds'] = inds_fnam
-        g['entry_1/data_1/photons'] = photons_fnam
-        g['entry_1/data_1/litpix'] = litpix_fnam
+        g['entry_1/data_1/inds'] = inds_fnam.astype(np.int32)
+        g['entry_1/data_1/photons'] = photons_fnam.astype(np.int32)
+        g['entry_1/data_1/litpix'] = litpix_fnam.astype(np.int32)
 
 
 J         = config['model_length']

@@ -40,23 +40,28 @@ J                          = I.shape[1]
 if rank == 0 :
     for d in tqdm(range(1), desc = 'loading data'):
         with h5py.File(sys.argv[1] + '/data.cxi') as f:
-            xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()]
-            litpix = np.cumsum(f['entry_1/data_1/litpix'])[:-1]
-            K      = np.split(f['entry_1/data_1/data'][()], litpix)
-            inds   = np.split(f['entry_1/data_1/inds'][()], litpix)
-            Ksums  = f['entry_1/data_1/photons'][()]
+            xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()].astype(np.float32)
+            litpix = f['entry_1/data_1/litpix'][()].astype(np.int32)
+            start_inds = np.concatenate(([0,], np.cumsum(litpix))).astype(np.int32)
+            #K      = f['entry_1/data_1/data'][()]
+            #inds   = f['entry_1/data_1/inds'][()].astype(np.int32)
+            K      = np.split(f['entry_1/data_1/data'][()], start_inds[1:-1])
+            inds   = np.split(f['entry_1/data_1/inds'][()].astype(np.int32), start_inds[1:-1])
+            Ksums  = f['entry_1/data_1/photons'][()].astype(np.int32)
             indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
             frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
             #K = np.zeros((frames, pixels), dtype = data.dtype)
             #for d in tqdm(range(1), desc = 'loading data'):
             #    data.read_direct(K, np.s_[:], np.s_[:])
 else :
-    K = xyz = inds = Ksums = None
+    K = xyz = inds = Ksums = litpix = start_inds = None
 
 K     = comm.bcast(K, root=0)
 inds  = comm.bcast(inds, root=0)
 Ksums = comm.bcast(Ksums, root=0)
-xyz   = comm.bcast(xyz, root=0)
+xyz        = comm.bcast(xyz, root=0)
+litpix     = comm.bcast(litpix, root=0)
+start_inds = comm.bcast(start_inds, root=0)
 
 # make dense K for testing
 K_dense = np.zeros((frames, pixels), dtype = K[0].dtype)
@@ -65,26 +70,24 @@ for d in range(frames):
 
 minval = 1e-10
 iters  = 6
-i0     = J // 2
 
-# split classes by rank
-my_classes = list(range(rank, classes, size))
-
-# split frames by rank
-my_frames = list(range(rank, frames, size))
-
-W    = np.empty((classes, rotations, pixels))
+Wsums = utils_cl.calculate_Wsums(C, R, I, xyz, dx)
 
 for i in range(iteration, iteration + config['iters']): 
     beta     = config['betas'][min(config['iters']-1, i)]
     update_b = config['update_b'][min(config['iters']-1, i)]
-    
+
     # Probability matrix
     # ------------------
+    c = utils_cl.Prob_sparse(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
+    expectation_value, log_likihood = c.calculate()
+    if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
+    
+
     c = utils_cl.Prob(C, R, K_dense, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
-    del c
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
+    sys.exit()
     
     # Maximise + Compress
     # -------------------

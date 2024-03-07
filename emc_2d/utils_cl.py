@@ -46,7 +46,167 @@ queue   = cl.CommandQueue(context)
 code = pathlib.Path(__file__).resolve().parent.joinpath('utils.c')
 cl_code = cl.Program(context, open(code, 'r').read()).build()
 
+def calculate_Wsums(C, R, I, xyz, dx):
+    """
+    Wsums[t, r] = sum_i C[i] I[u[i, r], v[i, r]] 
+    """
+    if rank == 0 :
+        i0 = np.float32(I.shape[-1] // 2)
+        dx = np.float32(dx)
 
+        classes   = np.int32(I.shape[0])
+        rotations = np.int32(R.shape[0])
+        pixels    = np.int32(C.shape[-1])
+        
+        C_cl     = cl.array.empty(queue, C.shape      , dtype = np.float32)
+        R_cl     = cl.array.empty(queue, R.shape      , dtype = np.float32)
+        rx_cl    = cl.array.empty(queue, xyz[0].shape , dtype = np.float32)
+        ry_cl    = cl.array.empty(queue, xyz[1].shape , dtype = np.float32)
+        Wsums_cl = cl.array.empty(queue, (classes, rotations), dtype = np.float32)
+
+        Wsums = np.empty((classes, rotations), dtype = np.float32)
+        
+        cl.enqueue_copy(queue, C_cl.data, C)
+        cl.enqueue_copy(queue, R_cl.data, R)
+        cl.enqueue_copy(queue, rx_cl.data, np.ascontiguousarray(xyz[0].astype(np.float32)))
+        cl.enqueue_copy(queue, ry_cl.data, np.ascontiguousarray(xyz[1].astype(np.float32)))
+
+        # copy I as an opencl "image" for bilinear sampling
+        shape        = I.shape
+        image_format = cl.ImageFormat(cl.channel_order.R, cl.channel_type.FLOAT)
+        flags        = cl.mem_flags.READ_ONLY
+        I_cl         = cl.Image(context, flags, image_format, 
+                                shape = shape[::-1], is_array = True)
+        
+        cl.enqueue_copy(queue, dest = I_cl, src = I, 
+                        origin = (0, 0, 0), region = shape[::-1])
+        
+        for i in tqdm(range(1), desc = 'calculating tomogram sums', disable = silent) :
+            cl_code.calculate_tomogram_sums(queue, (classes, rotations), None, 
+                    Wsums_cl.data, I_cl, C_cl.data, R_cl.data, 
+                    rx_cl.data, ry_cl.data,
+                    i0, dx, pixels)
+            queue.finish()
+        
+        cl.enqueue_copy(queue, src = Wsums_cl.data, dest = Wsums)
+    else :
+        Wsums = None
+    
+    Wsums = comm.bcast(Wsums, root=0)
+    return Wsums
+    
+
+class Prob_sparse():
+    def __init__(self, C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta):
+        """
+        keep i on the slow axis to speed up the sum
+        
+        T[i, t, r] = w[d] * W[i,t,r] + np.dot(b[d], B)[i]
+        logR[t, r] = beta * sum_i K[i] log T[i, t, r] - T[i, t, r]
+    
+        but if we do it this way we have to calcuate the entire W for every frame (~5e5)
+        seems to be pretty fast anyway...
+        """
+        # split frames by MPI rank
+        frames = P.shape[0]
+        self.ds = ds = np.linspace(0, frames, size + 1).astype(int)
+        self.dstart = dstart = ds[:-1:][rank]
+        self.dstop  = dstop  = ds[1::][rank]
+        
+        self.frames    = frames    = np.int32(self.dstop - self.dstart)
+        self.classes   = classes   = np.int32(P.shape[1])
+        self.rotations = rotations = np.int32(P.shape[2])
+        self.pixels    = pixels    = np.int32(B.shape[-1])
+         
+        self.beta = np.float32(beta)
+        self.dx   = np.float32(dx)
+        
+        self.i0 = np.float32(I.shape[-1] // 2)
+        
+        self.P = P
+        self.logR = logR
+        self.inds = inds
+        self.K    = K
+        
+        self.LR_cl = cl.array.zeros(queue, (frames, classes, rotations), dtype = np.float32)
+        self.w_cl  = cl.array.empty(queue, (frames,)   , dtype = np.float32)
+        self.I_cl  = cl.array.empty(queue, I.shape   , dtype = np.float32)
+        self.b_cl  = cl.array.empty(queue, (frames,)   , dtype = np.float32)
+        self.B_cl  = cl.array.empty(queue, (pixels,) , dtype = np.float32)
+        self.C_cl  = cl.array.empty(queue, C.shape   , dtype = np.float32)
+        self.R_cl  = cl.array.empty(queue, R.shape   , dtype = np.float32)
+        self.rx_cl  = cl.array.empty(queue, xyz[0].shape   , dtype = np.float32)
+        self.ry_cl  = cl.array.empty(queue, xyz[1].shape   , dtype = np.float32)
+        
+        # load arrays to gpu
+        cl.enqueue_copy(queue, self.w_cl.data, w[dstart: dstop])
+        cl.enqueue_copy(queue, self.b_cl.data, b[dstart: dstop])
+        cl.enqueue_copy(queue, self.B_cl.data, B)
+        cl.enqueue_copy(queue, self.C_cl.data, C)
+        cl.enqueue_copy(queue, self.R_cl.data, R)
+        cl.enqueue_copy(queue, self.rx_cl.data, np.ascontiguousarray(xyz[0].astype(np.float32)))
+        cl.enqueue_copy(queue, self.ry_cl.data, np.ascontiguousarray(xyz[1].astype(np.float32)))
+        
+        # copy I as an opencl "image" for bilinear sampling
+        shape        = I.shape
+        image_format = cl.ImageFormat(cl.channel_order.R, cl.channel_type.FLOAT)
+        flags        = cl.mem_flags.READ_ONLY
+        self.I_cl    = cl.Image(context, flags, image_format, 
+                                shape = shape[::-1], is_array = True)
+        
+        cl.enqueue_copy(queue, dest = self.I_cl, src = I, 
+                        origin = (0, 0, 0), region = shape[::-1])
+    
+    def calculate(self): 
+        if not silent :
+            print()
+        
+        logR = self.logR
+        P    = self.P
+        dchunk = 64
+        self.K_cl  = cl.array.empty(queue, (dchunk, self.pixels,) , dtype = np.uint8)
+        K          = np.empty((dchunk, self.pixels,), dtype = np.uint8)
+        for d in tqdm(np.arange(self.dstart, self.dstop, dchunk, dtype=np.int32), desc = 'calculating logR matrix', disable = silent) :
+            d1 = min(d+dchunk, self.dstop)
+            dd = d1 - d 
+            
+            # make dense K over frames chunk size
+            K.fill(0)
+            for i, di in enumerate(range(d, d1)):
+                K[i, self.inds[di]] = self.K[di]
+            cl.enqueue_copy(queue, self.K_cl.data, K)
+            
+            cl_code.calculate_LR2(queue, (self.rotations, self.classes, np.int32(dd)), None,
+                    self.I_cl, self.LR_cl.data, self.K_cl.data, self.w_cl.data, 
+                    self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
+                    self.rx_cl.data, self.ry_cl.data,
+                    self.beta, self.i0, self.dx, self.pixels, d)
+        
+        cl.enqueue_copy(queue, dest = logR[self.dstart: self.dstop], src=self.LR_cl.data)
+        
+        self.expectation_value = 0.
+        self.log_likihood      = 0.
+        for d in range(self.dstart, self.dstop):
+            m        = np.max(logR[d])
+            P[d]     = logR[d] - m
+            P[d]     = np.exp(P[d])
+            P[d]    /= np.sum(P[d])
+            
+            self.expectation_value += np.sum(P[d] * logR[d]) / self.beta
+            self.log_likihood      += np.sum(logR[d])        / self.beta
+
+        self.allgather()
+        return self.expectation_value, self.log_likihood
+    
+    def allgather(self):
+        for r in range(size):
+            dstart = self.ds[:-1:][r]
+            dstop  = self.ds[1::][r]
+            self.logR[dstart:dstop] = comm.bcast(self.logR[dstart:dstop], root=r)
+            self.P[dstart:dstop]    = comm.bcast(self.P[dstart:dstop], root=r)
+        
+        self.expectation_value = comm.allreduce(self.expectation_value)
+        self.log_likihood      = comm.allreduce(self.log_likihood)
 class Prob():
     def __init__(self, C, R, K, w, I, b, B, logR, P, xyz, dx, beta):
         """
@@ -73,7 +233,7 @@ class Prob():
         self.dx   = np.float32(dx)
         
         self.i0 = np.float32(I.shape[-1] // 2)
-
+        
         self.P = P
         self.logR = logR
         
@@ -107,7 +267,7 @@ class Prob():
         
         cl.enqueue_copy(queue, dest = self.I_cl, src = I, 
                         origin = (0, 0, 0), region = shape[::-1])
-
+    
     def calculate(self): 
         if not silent :
             print()
@@ -115,9 +275,6 @@ class Prob():
         logR = self.logR
         P    = self.P
         for i in tqdm(range(1), desc = 'calculating logR matrix', disable = silent) :
-            #wmax = 256
-            #frames_max = math.ceil(self.frames / wmax) * wmax
-            #cl_code.calculate_LR(queue, (frames_max, self.classes, self.rotations), (wmax, 1, 1), 
             cl_code.calculate_LR(queue, (self.frames, self.classes, self.rotations), None, 
                     self.I_cl, self.LR_cl.data, self.K_cl.data, self.w_cl.data, 
                     self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
