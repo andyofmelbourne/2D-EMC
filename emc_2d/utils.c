@@ -378,99 +378,199 @@ kernel void update_w(
 
 
 kernel void update_b(
-image2d_array_t I, 
-global float* B, 
-global float* w, 
-global float* b, 
-global unsigned char* K, 
-global float* P, 
-const float c, 
-global float* xmax, 
-const int   iters, 
-const int   frames, 
-const int   classes,
-const int   rotations,
-const int   pixels,
-const int   d,
-global float* C, 
-global float* R, 
-global float* rx, 
-global float* ry, 
-const float i0,
-const float dx
-)
+    image2d_array_t I, 
+    global float* B, 
+    global float* w, 
+    global float* b, 
+    global unsigned char* K, 
+    global float* P, 
+    const float c, 
+    global float* xmax, 
+    const int   iters, 
+    const int   frames, 
+    const int   classes,
+    const int   rotations,
+    const int   pixels,
+    const int   d,
+    global float* C, 
+    global float* R, 
+    global float* rx, 
+    global float* ry, 
+    const float i0,
+    const float dx)
 {
-
-//int d    = get_group_id(0);
-int wid  = get_local_id(0);
-int size = get_local_size(0);
-
-
-int i, t, r, iter;
-float c_l, w_l, xmax_l, T, step, PK;
-unsigned char K_l;
-
-local float f[256];
-local float g[256];
-
-local float x ;
+    //int d    = get_group_id(0);
+    int wid  = get_local_id(0);
+    int size = get_local_size(0);
 
 
-x      = b[d];
-w_l    = w[d];
-xmax_l = xmax[d];
+    int i, t, r, iter;
+    float c_l, w_l, xmax_l, T, step, PK;
+    unsigned char K_l;
 
-float B_l;
-float fsum, gsum;
+    local float f[256];
+    local float g[256];
 
-float4 coord ;
-float4 W;
-float rx_l, ry_l;
+    local float x ;
 
-for (iter=0; iter<iters; iter++){
-    f[wid] = 0.;
-    g[wid] = 0.;
-    for (i=wid; i<pixels; i+=size){
-        B_l  = w_l * C[i] / B[i] ;
-        K_l  = K[i];
-        rx_l = rx[i];
-        ry_l = ry[i];
-    
-    for (r=0; r<rotations; r++){
-        coord.y = i0 + (R[4*r + 0] * rx_l + R[4*r + 1] * ry_l) / dx + 0.5;
-        coord.x = i0 + (R[4*r + 2] * rx_l + R[4*r + 3] * ry_l) / dx + 0.5;
-    
-    for (t=0; t<classes; t++){
-        coord.z = t ;
+
+    x      = b[d];
+    w_l    = w[d];
+    xmax_l = xmax[d];
+
+    float B_l;
+    float fsum, gsum;
+
+    float4 coord ;
+    float4 W;
+    float rx_l, ry_l;
+
+    for (iter=0; iter<iters; iter++){
+        f[wid] = 0.;
+        g[wid] = 0.;
+        for (i=wid; i<pixels; i+=size){
+            B_l  = w_l * C[i] / B[i] ;
+            K_l  = K[i];
+            rx_l = rx[i];
+            ry_l = ry[i];
         
-        W = read_imagef(I, trilinear, coord);
+        for (r=0; r<rotations; r++){
+            coord.y = i0 + (R[4*r + 0] * rx_l + R[4*r + 1] * ry_l) / dx + 0.5;
+            coord.x = i0 + (R[4*r + 2] * rx_l + R[4*r + 3] * ry_l) / dx + 0.5;
         
-        T = x + B_l * W.x ;
+        for (t=0; t<classes; t++){
+            coord.z = t ;
+            
+            W = read_imagef(I, trilinear, coord);
+            
+            T = x + B_l * W.x ;
+            
+            PK      = P[d * rotations * classes + t * rotations + r] * K_l;
+            f[wid] += PK / T ;
+            g[wid] -= PK / (T*T) ;
+        }}}
         
-        PK      = P[d * rotations * classes + t * rotations + r] * K_l;
-        f[wid] += PK / T ;
-        g[wid] -= PK / (T*T) ;
-    }}}
-    
-    // work group reduce
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (wid == 0) {
-        fsum = 0 ;
-        gsum = 0 ;
-        for (i=0; i<size; i++) {
-            fsum += f[i];
-            gsum += g[i];
+        // work group reduce
+        barrier(CLK_LOCAL_MEM_FENCE);
+        if (wid == 0) {
+            fsum = 0 ;
+            gsum = 0 ;
+            for (i=0; i<size; i++) {
+                fsum += f[i];
+                gsum += g[i];
+            }
+        step = fsum / gsum * (1 - fsum / c);
+        x   += step;
+        x    = clamp(x, (float)1e-8, xmax_l) ;
         }
-    step = fsum / gsum * (1 - fsum / c);
-    x   += step;
-    x    = clamp(x, (float)1e-8, xmax_l) ;
+        barrier(CLK_LOCAL_MEM_FENCE);
+        
     }
-    barrier(CLK_LOCAL_MEM_FENCE);
-    
+
+    if (wid == 0) b[d] = x;
 }
 
-if (wid == 0) b[d] = x;
+
+kernel void update_b2(
+    image2d_array_t I, 
+    global float* B, 
+    global float* w, 
+    global float* b, 
+    global unsigned char* K, 
+    global float* P, 
+    const float c, 
+    global float* xmax, 
+    const int   iters, 
+    const int   frames, 
+    const int   classes,
+    const int   rotations,
+    const int   pixels,
+    const int   d,
+    global float* C, 
+    global float* R, 
+    global float* rx, 
+    global float* ry, 
+    global int* class_rotation_list,
+    const int class_rotation_list_len,
+    const float i0,
+    const float dx)
+{
+    //int d    = get_group_id(0);
+    int wid  = get_local_id(0);
+    int size = get_local_size(0);
+
+
+    int i, j, t, r, iter;
+    float c_l, w_l, xmax_l, T, step, PK;
+    unsigned char K_l;
+
+    local float f[256];
+    local float g[256];
+
+    local float x ;
+
+
+    x      = b[d];
+    w_l    = w[d];
+    xmax_l = xmax[d];
+
+    float B_l;
+    float fsum, gsum;
+
+    float4 coord ;
+    float4 W;
+    float rx_l, ry_l;
+
+    for (iter=0; iter<iters; iter++){
+        f[wid] = 0.;
+        g[wid] = 0.;
+        for (i=wid; i<pixels; i+=size){
+            B_l  = w_l * C[i] / B[i] ;
+            K_l  = K[i];
+            rx_l = rx[i];
+            ry_l = ry[i];
+        
+        for (j = 0; j < class_rotation_list_len; j++){
+            t = class_rotation_list[2*j + 0]; 
+            r = class_rotation_list[2*j + 1]; 
+            
+            coord.y = i0 + (R[4*r + 0] * rx_l + R[4*r + 1] * ry_l) / dx + 0.5;
+            coord.x = i0 + (R[4*r + 2] * rx_l + R[4*r + 3] * ry_l) / dx + 0.5;
+            coord.z = t ;
+            
+            W = read_imagef(I, trilinear, coord);
+            
+            T = x + B_l * W.x ;
+            
+            PK      = P[d * rotations * classes + t * rotations + r] * K_l;
+            f[wid] += PK / T ;
+            g[wid] -= PK / (T*T) ;
+        }}
+        
+        // work group reduce
+        barrier(CLK_LOCAL_MEM_FENCE);
+        if (wid == 0) {
+            fsum = 0 ;
+            gsum = 0 ;
+            for (i=0; i<size; i++) {
+                fsum += f[i];
+                gsum += g[i];
+            }
+        step = fsum / gsum * (1 - fsum / c);
+        x   += step;
+        x    = clamp(x, (float)1e-8, xmax_l) ;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+        
+    }
+
+    if (wid == 0) b[d] = x;
 }
+
+
+
+
+
 
 kernel void test_1d_image(
     image1d_t I, 

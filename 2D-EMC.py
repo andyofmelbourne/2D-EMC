@@ -88,7 +88,6 @@ for i in range(iteration, iteration + config['iters']):
     cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
     cW.update()
     Wsums = cW.Wsums.copy()
-    del cW
     
     #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
     #expectation_value, log_likihood = c.calculate()
@@ -97,13 +96,10 @@ for i in range(iteration, iteration + config['iters']):
 
     cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, frames, iters)
     cw.update()
-    
+
     if update_b :
-        cb = utils_cl.Update_b(B, Ksums, cw)
+        cb = utils_cl.Update_b_sparse(B, Ksums, cw)
         cb.update()
-        del cb
-    
-    del cw
     
     # Save
     # ----

@@ -340,20 +340,30 @@ class Update_W():
         # but not unpopular classes, since we want to keep updating them
         favour_rotations = np.sum(P, axis = (0,))
         self.mask_rotations   = {}
+        skipped_rots = 0
         for t in range(classes) :
             self.mask_rotations[t] = np.where(favour_rotations[t] > (1e-3 * np.max(favour_rotations[t])))[0].astype(np.int32)
+            skipped_rots += rotations - self.mask_rotations[t].shape[0]
         
         self.weights = np.zeros((classes, rotations))#np.sum(P, axis=0)
         
         # skip unpopular frames for a given class and rotation
         favour_frames = np.sum(P, axis = (0, 2))
         self.mask_frames   = {}
+        skipped_ds = 0
         for t in range(classes):
             for r in range(rotations):
                 p = P[:, t, r]
                 self.mask_frames[(t, r)] = np.where(p > (1e-3 * np.max(p)))[0].astype(np.int32)
                 self.weights[t, r] += np.sum(p[self.mask_frames[(t, r)]])
+                skipped_ds += frames - self.mask_frames[(t, r)].shape[0]
+        
         self.frame_list_cl  = cl.array.empty(queue, (frames,)   , dtype = np.float32)
+
+        if not silent : 
+            print()
+            print('skipping', round(100 * skipped_rots / (classes * rotations), 2) ,'% of classes/rotations due to small P-value') 
+            print('skipping', round(100 * skipped_ds / P.size, 2) ,'% of frames due to small P-value') 
         
     def merge_pixels(self, t, r):
         self.points[0] = self.R[r, 0, 0] * self.rx + self.R[r, 0, 1] * self.ry
@@ -368,7 +378,6 @@ class Update_W():
         self.Wsums[t, r] += np.sum(self.Wbuf)
         
     def update(self):
-        if not silent : print()
         wmax = 256
         pixels_max = math.ceil(self.pixels / wmax) * wmax
         
@@ -491,17 +500,21 @@ class Update_w():
         
         # skip unpopular rotations and classes for a given frame
         self.classes_rotations_list = {}
+        skipped = 0
         for d in range(frames) :
             p       = self.P[d]
             pthresh = 1e-3 * p.max()
-            ts, rs  = np.where(p > pthresh)
+            ts, rs  = np.where(p >= pthresh)
             self.classes_rotations_list[d] = np.empty((len(rs), 2), dtype=np.int32)
             self.classes_rotations_list[d][:, 0] = ts
             self.classes_rotations_list[d][:, 1] = rs
-
+            skipped += classes * rotations - len(ts)
+            
+        if not silent : 
+            print()
+            print('skipping', round(100 * skipped / self.P.size, 2) ,'% of classes/rotations due to small P-value') 
 
     def update(self):
-        if not silent : print()
         events      = self.groups * [1,]
         copy_events = 6 * [1,]
         
@@ -620,7 +633,7 @@ class Update_b():
         # need an out-of-order queue
         queue2 = cl.CommandQueue(context, properties=cl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE)
         
-        for d in tqdm(np.arange(self.frames, dtype=np.int32), desc=f'updating fluence estimates for {self.frames} frames', disable = silent):
+        for d in tqdm(np.arange(self.frames, dtype=np.int32), desc=f'updating background weights for {self.frames} frames', disable = silent):
             inds = np.where(self.K[self.dstart + d] > 0)[0]
             K    = self.K[self.dstart + d][inds]
             pixels = np.int32(len(inds))
@@ -654,6 +667,117 @@ class Update_b():
         
         s.allgather()
 
+    def allgather(self):
+        cw = self.cw
+        for r in range(size):
+            dstart = cw.ds[:-1:][r]
+            dstop  = cw.ds[1::][r]
+            cw.b[dstart: dstop] = comm.bcast(cw.b[dstart: dstop], root=r)
+
+class Update_b_sparse():
+    """
+    c       = sum_i B[i]
+    
+    xmax[d] = sum_i K[d, i] / c
+    
+    loop iters:
+        T[d, t, r, i] = b[d] + w[d] W[t, r, i] / B[i]
+        PK[d, t, r]   = P[d, t, r] K[d, i]
+        f[d]          = sum_tri PK[d, t, r] / T[d, t, r, i]
+        g[d]          =-sum_tri PK[d, t, r] / T[d, t, r, i]^2
+        
+        step[d] = f[d] / g[d] * (1 - f[d] / c[d])
+            
+        b[d] += step[d]
+
+    We should transpose to keep d on the fast axis (coallesed read + local sum)
+    We should have frames as the worker index 
+    
+    chunk over frames
+    worker index = ds
+    load K[ds] and transpose --> K[i, d]
+    load P[ds] and transpose --> P[t, r, d]
+    load w[ds]
+    load b[ds]
+    load B[i]
+    load I, R, rx, ry, dx, i0
+    
+    each worker has a d-index
+    w = w[d]
+    b = b[d]
+    loop iters:
+        loop t,r,i :
+            W[t, r, i] <-- I, C 
+            T    = b + w W[t, r, i] / B[i] 
+            PK   = P[t, r, d] K[i, d]
+            f   += PK / T
+            g   -= PK / T^2
+    
+        step[d] = f / g * (1 - f / c)
+            
+        w += step[d]
+    """
+    def __init__(self, B, Ksums, cw):
+        # calculate c
+        cw.c   = np.float32(np.sum(B))
+        
+        # calculate xmax[d]
+        xmax = Ksums[cw.dstart: cw.dstop].astype(np.float32) / cw.c
+        
+        # replace xmax
+        cw.xmax = xmax
+        cl.enqueue_copy(queue, dest = cw.xmax_cl.data, src = xmax)
+        
+        self.cw = cw
+    
+    def update(s):
+        self = s.cw   
+        if not silent : print()
+        events      = self.groups * [1,]
+        copy_events = 6 * [1,]
+        
+        # need an out-of-order queue
+        queue2 = cl.CommandQueue(context, properties=cl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE)
+        
+        for d in tqdm(np.arange(self.frames, dtype=np.int32), desc=f'updating background weights for {self.frames} frames', disable = silent):
+            inds = self.inds[d]
+            K    = self.K[d]
+            pixels = np.int32(len(inds))
+            
+            index = d % self.groups
+            
+            # wait for last execution of index to finish
+            if d > self.groups : events[index].wait()
+            
+            # send W, K, B to gpu
+            copy_events[0] = cl.enqueue_copy(queue2, dest = self.K_cl[index].data, src = np.ascontiguousarray(K), is_blocking = False)
+            copy_events[1] = cl.enqueue_copy(queue2, dest = self.B_cl[index].data, src = np.ascontiguousarray(self.B[0, inds]), is_blocking = False)
+            copy_events[2] = cl.enqueue_copy(queue2, dest = self.rx_cl[index].data, src = np.ascontiguousarray(self.rx[inds]), is_blocking = False)
+            copy_events[3] = cl.enqueue_copy(queue2, dest = self.ry_cl[index].data, src = np.ascontiguousarray(self.ry[inds]), is_blocking = False)
+            copy_events[4] = cl.enqueue_copy(queue2, dest = self.C_cl[index].data, src = np.ascontiguousarray(self.C[inds]), is_blocking = False)
+            
+            # send list of classes and rotations to consider
+            copy_events[5] = cl.enqueue_copy(queue2, dest = self.tr_list_cl[index].data, src = self.classes_rotations_list[d], is_blocking = False)
+            
+            events[index] = cl_code.update_b2(queue2, (256,), (256,), 
+                             self.I_cl, self.B_cl[index].data, 
+                             self.w_cl.data, self.b_cl.data,
+                             self.K_cl[index].data, self.P_cl.data,
+                             self.c, self.xmax_cl.data, 
+                             self.iters, self.frames, self.classes,  
+                             self.rotations, pixels, d, 
+                             self.C_cl[index].data, self.R_cl.data, 
+                             self.rx_cl[index].data, self.ry_cl[index].data, 
+                             self.tr_list_cl[index].data, np.int32(self.classes_rotations_list[d].shape[0]),
+                             self.i0, self.dx, 
+                             wait_for = copy_events)
+
+        queue2.finish()
+
+        cl.enqueue_copy(queue, dest = self.b[self.dstart: self.dstop], src = self.b_cl.data)
+        
+        s.allgather()
+         
     def allgather(self):
         cw = self.cw
         for r in range(size):
