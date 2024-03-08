@@ -142,6 +142,12 @@ if write_output :
     frame_index = 0
     photon_index = 0
     with h5py.File(output, 'a') as g:
+        # event identifiers
+        cellids  = []
+        pulseids = []
+        vdsids   = []
+        fnams    = []
+        file_index = []
         
         # assume all data fits in memory
         # writing and resizing on individual frames is too expensive (memory + time)
@@ -149,9 +155,14 @@ if write_output :
         data_fnam = []
         photons_fnam = []
         litpix_fnam = []
-        for fnam in frames :
+        for i, fnam in enumerate(frames) :
+            fnams.append(fnam)
+            
             with h5py.File(fnam, 'r') as f:
-                data_file = f['entry_1/data_1/data']
+                data_file     = f['entry_1/data_1/data']
+                cellids_file  = f['/entry_1/cellId'][()]
+                pulseids_file = f['/entry_1/pulseId'][()]
+                vdsids_file   = f['/entry_1/experiment_identifier'][()]
             
                 for d in tqdm(frames[fnam], desc=f'loading data: {fnam}'):
                     frame = data_file[d][mask]
@@ -159,11 +170,24 @@ if write_output :
                     data_fnam.append(frame[inds_fnam[-1]])
                     photons_fnam.append(np.sum(data_fnam[-1]))
                     litpix_fnam.append(len(inds_fnam[-1]))
-    
-            litpix_fnam  = np.array(litpix_fnam)
-            inds_fnam    = np.concatenate(inds_fnam)
-            data_fnam    = np.concatenate(data_fnam)
-            photons_fnam = np.array(photons_fnam)
+
+                    cellids.append(cellids_file[d])
+                    pulseids.append(pulseids_file[d])
+                    vdsids.append(vdsids_file[d])
+                    file_index.append(i)
+         
+        litpix_fnam  = np.array(litpix_fnam)
+        inds_fnam    = np.concatenate(inds_fnam)
+        data_fnam    = np.concatenate(data_fnam)
+        photons_fnam = np.array(photons_fnam)
+
+        cellids    = np.array(cellids)
+        pulseids   = np.array(pulseids)
+        vdsids     = np.array(vdsids)
+        file_index = np.array(file_index)
+        
+        dt = h5py.special_dtype(vlen=str)
+        fnams = np.array(fnams, dtype=dt)
 
         print()
         print(f'writing sparse photons to {output}')
@@ -172,6 +196,11 @@ if write_output :
         g['entry_1/data_1/photons'] = photons_fnam.astype(np.int32)
         g['entry_1/data_1/litpix'] = litpix_fnam.astype(np.int32)
 
+        g['entry_1/cellId'] = cellids
+        g['entry_1/pulseId'] = pulseids
+        g['entry_1/vds_frame_index'] = vdsids
+        g['entry_1/vds_file_index'] = file_index
+        g['entry_1/vds_file_names'] = fnams
 
 J         = config['model_length']
 classes   = config['classes']
