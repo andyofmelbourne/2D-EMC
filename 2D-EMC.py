@@ -79,23 +79,18 @@ for i in range(iteration, iteration + config['iters']):
 
     # Probability matrix
     # ------------------
-    c = utils_cl.Prob_sparse(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
+    c = utils_cl.Prob(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-    
-
-    c = utils_cl.Prob(C, R, K_dense, w, I, b, B, logR, P, xyz, dx, beta)
-    expectation_value, log_likihood = c.calculate()
-    if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-    sys.exit()
     
     # Maximise + Compress
     # -------------------
-    cW = utils_cl.Update_W(w, I, b, B, P, K_dense, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
+    cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
     cW.update()
     Wsums = cW.Wsums.copy()
     del cW
-
+    
+    break
     #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
     #expectation_value, log_likihood = c.calculate()
     #del c

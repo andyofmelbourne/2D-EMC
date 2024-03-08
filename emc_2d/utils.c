@@ -2,7 +2,7 @@ constant sampler_t trilinear = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP |
 constant sampler_t nearest = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST ;
 
 
-__kernel void calculate_LR2 (
+__kernel void calculate_LR (
     image2d_array_t I, 
     global float *LR,  
     global unsigned char *K, 
@@ -69,59 +69,6 @@ __kernel void calculate_LR2 (
 
 // T[i, t, r]    = w[d] W[i, t, r] + b[d] B[i]
 // logR[d, t, r] = beta sum_i K[i, d] log T[i, t, r] - T[i, t, r]
-
-__kernel void calculate_LR (
-    image2d_array_t I, 
-    global float *LR,  
-    global unsigned char *K, 
-    global float *w,
-    global float *b, 
-    global float *B, 
-    global float *C, 
-    global float *R, 
-    global float *rx, 
-    global float *ry, 
-    const float beta, 
-    const float i0,
-    const float dx,
-    const int pixels, 
-    const int frames)
-{
-    int frame = get_global_id(0);
-    int class = get_global_id(1);
-    int rotation = get_global_id(2);
-    
-    //int frames = get_global_size(0);
-    int classes = get_global_size(1);
-    int rotations = get_global_size(2);
-
-    float R_l[4];
-    float T;
-    float logR = 0.;
-
-    int i;
-
-    for (i=0; i<4; i++) {
-        R_l[i] = R[4*rotation + i];
-    }
-
-    float4 coord ;
-    float4 W;
-
-    coord.z = class ;
-
-    for (i=0; i<pixels; i++) {
-        coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
-        coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
-        
-        W = read_imagef(I, trilinear, coord);
-        
-        T = w[frame] * C[i] * W.x + b[frame] * B[i];
-        logR += K[frames * i + frame] * log(T) - T ;
-    }
-
-    LR[rotations * classes * frame + rotations * class + rotation] = beta * logR;
-}
 
 
 
@@ -306,6 +253,67 @@ Wout[i] = W;
 }
 }
 
+
+__kernel void update_W2 (
+global float *Wout,  
+global float *B,  
+global float *w,
+global float *b, 
+global unsigned char *K, 
+global float *P, 
+global int *frame_list,
+const float c,
+const int iters,
+const int P_offset,
+const int P_stride,
+const int frames,
+const int pixels)
+{
+int j, d, iter;
+float xmax = 0.;
+float T, f, g, step, PK;
+
+int i = get_global_id(0);
+
+//int g0 = get_num_groups(0);
+//int g1 = get_num_groups(1);
+//int g2 = get_num_groups(2);
+//
+//int w0 = get_local_size(0);
+//int w1 = get_local_size(1);
+//int w2 = get_local_size(2);
+//printf("%d %d\n", w0, g0);
+
+if (i < pixels){
+
+for (j=0; j<frames; j++){
+    d = frame_list[j];
+    xmax += P[d * P_stride + P_offset] * K[d * pixels + i];
+}
+xmax /= c;
+
+float W = xmax / 2.;
+
+for (iter=0; iter<iters; iter++){
+    f = 0.;
+    g = 0.;
+    for (j=0; j<frames; j++){
+        d = frame_list[j];
+        T  = W + b[d] * B[i] / w[d];
+        PK = P[d * P_stride + P_offset] * K[d * pixels + i];
+        f += PK / T ;
+        g -= PK / (T*T) ;
+    }
+    
+    step = f / g * (1 - f / c);
+    
+    W += step;
+    W = clamp(W, (float)1e-8, xmax) ;
+}
+
+Wout[i] = W;
+}
+}
 
 
 
