@@ -90,22 +90,21 @@ for i in range(iteration, iteration + config['iters']):
     Wsums = cW.Wsums.copy()
     del cW
     
-    break
     #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
     #expectation_value, log_likihood = c.calculate()
     #del c
     #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-    
-    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, K_dense, C, R, dx, xyz, frames, iters)
+
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, frames, iters)
     cw.update()
     
     if update_b :
         cb = utils_cl.Update_b(B, Ksums, cw)
         cb.update()
         del cb
-
+    
     del cw
-
+    
     # Save
     # ----
     if rank == 0 : 
