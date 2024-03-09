@@ -313,6 +313,7 @@ class Update_W():
         self.i0        = I.shape[-1] // 2
         self.dx        = dx
         self.minval    = minval
+        self.P         = P
         
         self.rx = np.ascontiguousarray(xyz[0, istart:istop].astype(np.float32))
         self.ry = np.ascontiguousarray(xyz[1, istart:istop].astype(np.float32))
@@ -333,13 +334,12 @@ class Update_W():
         self.ry_cl = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
         self.K_cl  = cl.array.empty(queue, (self.frames, pixels,) , dtype = np.uint8)
         self.W_cl  = cl.array.empty(queue, (pixels,)              , dtype = np.float32)
-        self.P_cl  = cl.array.empty(queue, P.shape   , dtype = np.float32)
         self.w_cl  = cl.array.empty(queue, w.shape   , dtype = np.float32)
         self.b_cl  = cl.array.empty(queue, b.shape   , dtype = np.float32)
+        self.P_cl  = cl.array.empty(queue, (self.frames,)   , dtype = np.float32)
         
         self.Wbuf  = np.empty((pixels,), dtype=np.float32)
         
-        cl.enqueue_copy(queue, dest = self.P_cl.data, src = P)
         cl.enqueue_copy(queue, dest = self.w_cl.data, src = w)
         cl.enqueue_copy(queue, dest = self.b_cl.data, src = b)
         cl.enqueue_copy(queue, dest = self.B_cl.data, src = B[0, istart:istop])
@@ -406,11 +406,9 @@ class Update_W():
         wmax = 256
         pixels_max = math.ceil(self.pixels / wmax) * wmax
         
-        P_stride = self.classes * self.rotations
-        
         for t in tqdm(np.arange(self.classes, dtype=np.int32), desc='updating classes', disable = silent):
             for r in tqdm(self.mask_rotations[t], desc='looping over rotations', leave = False, disable = silent):
-                P_offset = t * self.rotations + r
+                cl.enqueue_copy(queue, dest = self.P_cl.data, src = np.ascontiguousarray(self.P[:, t, r]))
                  
                 cl.enqueue_copy(queue, dest = self.frame_list_cl.data, src = self.mask_frames[(t, r)])
                 
@@ -419,7 +417,7 @@ class Update_W():
                                  self.w_cl.data, self.b_cl.data,
                                  self.K_cl.data, self.P_cl.data,
                                  self.frame_list_cl.data,
-                                 self.c[t, r], self.iters, P_offset, P_stride,
+                                 self.c[t, r], self.iters, 
                                  np.int32(self.mask_frames[(t, r)].shape[0]), 
                                  self.pixels)
                              

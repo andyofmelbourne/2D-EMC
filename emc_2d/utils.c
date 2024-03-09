@@ -206,8 +206,6 @@ global float *P,
 global int *frame_list,
 const float c,
 const int iters,
-const int P_offset,
-const int P_stride,
 const int frames,
 const int pixels)
 {
@@ -230,7 +228,7 @@ if (i < pixels){
 
 for (j=0; j<frames; j++){
     d = frame_list[j];
-    xmax += P[d * P_stride + P_offset] * K[d * pixels + i];
+    xmax += P[d] * K[d * pixels + i];
 }
 xmax /= c;
 
@@ -242,7 +240,7 @@ for (iter=0; iter<iters; iter++){
     for (j=0; j<frames; j++){
         d = frame_list[j];
         T  = W + b[d] * B[i] / w[d];
-        PK = P[d * P_stride + P_offset] * K[d * pixels + i];
+        PK = P[d] * K[d * pixels + i];
         f += PK / T ;
         g -= PK / (T*T) ;
     }
