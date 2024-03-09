@@ -36,37 +36,18 @@ frames, classes, rotations = P.shape
 pixels                     = B.shape[-1]
 J                          = I.shape[1]
 
-# load data
-if rank == 0 :
-    for d in tqdm(range(1), desc = 'loading data'):
-        with h5py.File(sys.argv[1] + '/data.cxi') as f:
-            xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()].astype(np.float32)
-            litpix = f['entry_1/data_1/litpix'][()].astype(np.int32)
-            start_inds = np.concatenate(([0,], np.cumsum(litpix))).astype(np.int32)
-            #K      = f['entry_1/data_1/data'][()]
-            #inds   = f['entry_1/data_1/inds'][()].astype(np.int32)
-            K      = np.split(f['entry_1/data_1/data'][()], start_inds[1:-1])
-            inds   = np.split(f['entry_1/data_1/inds'][()].astype(np.int32), start_inds[1:-1])
-            Ksums  = f['entry_1/data_1/photons'][()].astype(np.int32)
-            indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
-            frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
-            #K = np.zeros((frames, pixels), dtype = data.dtype)
-            #for d in tqdm(range(1), desc = 'loading data'):
-            #    data.read_direct(K, np.s_[:], np.s_[:])
-else :
-    K = xyz = inds = Ksums = litpix = start_inds = None
+# load data (instead of bcast due to MPI size limit)
+for d in tqdm(range(1), desc = 'loading data'):
+    with h5py.File(sys.argv[1] + '/data.cxi') as f:
+        xyz  = f['/entry_1/instrument_1/detector_1/xyz_map'][()].astype(np.float32)
+        litpix = f['entry_1/data_1/litpix'][()].astype(np.int32)
+        start_inds = np.concatenate(([0,], np.cumsum(litpix))).astype(np.int32)
+        K      = np.split(f['entry_1/data_1/data'][()], start_inds[1:-1])
+        inds   = np.split(f['entry_1/data_1/inds'][()].astype(np.int32), start_inds[1:-1])
+        Ksums  = f['entry_1/data_1/photons'][()].astype(np.int32)
+        indices = f['entry_1/instrument_1/detector_1/pixel_indices'][()]
+        frame_shape = f['entry_1/instrument_1/detector_1/frame_shape'][()]
 
-K     = comm.bcast(K, root=0)
-inds  = comm.bcast(inds, root=0)
-Ksums = comm.bcast(Ksums, root=0)
-xyz        = comm.bcast(xyz, root=0)
-litpix     = comm.bcast(litpix, root=0)
-start_inds = comm.bcast(start_inds, root=0)
-
-# make dense K for testing
-K_dense = np.zeros((frames, pixels), dtype = K[0].dtype)
-for d in range(frames):
-    K_dense[d, inds[d]] = K[d]
 
 minval = 1e-10
 iters  = 6
