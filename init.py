@@ -7,6 +7,8 @@ from emc_2d import utils
 import sys
 import shutil
 
+np.random.seed(1)
+
 """
 (base) :~/Documents/git_repos/2D-EMC$ h5ls -r ~/Documents/2023/P3004-take-2/gold/hits_r0087.cxi 
 /                        Group

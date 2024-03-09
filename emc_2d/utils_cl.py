@@ -108,12 +108,12 @@ class Prob():
         seems to be pretty fast anyway...
         """
         # split frames by MPI rank
-        frames = P.shape[0]
-        self.ds = ds = np.linspace(0, frames, size + 1).astype(int)
-        self.dstart = dstart = ds[:-1:][rank]
-        self.dstop  = dstop  = ds[1::][rank]
+        self.dchunk = 64
+        self.d_list, dstart, dstop = self.my_frames(rank, P.shape[0], self.dchunk)
+        self.dstart = dstart
+        self.dstop  = dstop
         
-        self.frames    = frames    = np.int32(self.dstop - self.dstart)
+        self.frames    = frames    = np.int32(dstop - dstart)
         self.classes   = classes   = np.int32(P.shape[1])
         self.rotations = rotations = np.int32(P.shape[2])
         self.pixels    = pixels    = np.int32(B.shape[-1])
@@ -156,17 +156,29 @@ class Prob():
         
         cl.enqueue_copy(queue, dest = self.I_cl, src = I, 
                         origin = (0, 0, 0), region = shape[::-1])
+
+    def my_frames(self, r, frames, chunk = 64):
+        ds = np.linspace(0, frames, size + 1).astype(int)
+        dstart = ds[:-1:][r]
+        dstop  = ds[1::][r]
+        my_ds = np.arange(dstart, dstop, chunk, dtype=np.int32)
+        return my_ds, dstart, dstop
     
     def calculate(self): 
         if not silent :
             print()
+        
+        self.expectation_value = 0.
+        self.log_likihood      = 0.
         
         logR = self.logR
         P    = self.P
         dchunk = 64
         self.K_cl  = cl.array.empty(queue, (dchunk, self.pixels,) , dtype = np.uint8)
         K          = np.empty((dchunk, self.pixels,), dtype = np.uint8)
-        for d in tqdm(np.arange(self.dstart, self.dstop, dchunk, dtype=np.int32), desc = 'calculating logR matrix', disable = silent) :
+        
+        for i_d, d in tqdm(enumerate(self.d_list), total = len(self.d_list), 
+                         desc = 'calculating logR matrix', disable = silent):
             d1 = min(d+dchunk, self.dstop)
             dd = d1 - d 
             
@@ -180,22 +192,35 @@ class Prob():
                     self.I_cl, self.LR_cl.data, self.K_cl.data, self.w_cl.data, 
                     self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
                     self.rx_cl.data, self.ry_cl.data,
-                    self.beta, self.i0, self.dx, self.pixels, d)
-        
-        cl.enqueue_copy(queue, dest = logR[self.dstart: self.dstop], src=self.LR_cl.data)
-        
-        self.expectation_value = 0.
-        self.log_likihood      = 0.
-        for d in range(self.dstart, self.dstop):
-            m        = np.max(logR[d])
-            P[d]     = logR[d] - m
-            P[d]     = np.exp(P[d])
-            P[d]    /= np.sum(P[d])
-            
-            self.expectation_value += np.sum(P[d] * logR[d]) / self.beta
-            self.log_likihood      += np.sum(logR[d])        / self.beta
+                    self.beta, self.i0, self.dx, self.pixels, np.int32(d - self.dstart))
+             
+            # offset in bytes for LR_cl
+            offset = 4 * (d-self.dstart) * self.classes * self.rotations
+            cl.enqueue_copy(queue, dest = logR[d: d1], src = self.LR_cl.data, src_offset = offset)
 
-        self.allgather()
+            # test offset
+            #assert(np.allclose(logR[self.dstart: d1], self.LR_cl.get()[:d1-self.dstart]))
+             
+            for d in range(d, d1):
+                m        = np.max(logR[d])
+                P[d]     = logR[d] - m
+                P[d]     = np.exp(P[d])
+                P[d]    /= np.sum(P[d])
+                
+                self.expectation_value += np.sum(P[d] * logR[d]) / self.beta
+                self.log_likihood      += np.sum(logR[d])        / self.beta
+
+            # allgather here to reduce size
+            for r in range(size):
+                r_ds, dstart, dstop = self.my_frames(r, self.P.shape[0], self.dchunk)
+                d = r_ds[i_d]
+                d1 = min(d+dchunk, dstop)
+                dd = d1 - d 
+                self.logR[d:d1] = comm.bcast(self.logR[d:d1], root=r)
+                self.P[d:d1]    = comm.bcast(self.P[d:d1], root=r)
+        
+        self.expectation_value = comm.allreduce(self.expectation_value)
+        self.log_likihood      = comm.allreduce(self.log_likihood)
         return self.expectation_value, self.log_likihood
     
     def allgather(self):
