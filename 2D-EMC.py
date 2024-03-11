@@ -63,23 +63,23 @@ for i in range(iteration, iteration + config['iters']):
     c = utils_cl.Prob(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-    
+
     # Maximise + Compress
     # -------------------
     cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
     cW.update()
     Wsums = cW.Wsums.copy()
-    
+
     #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
     #expectation_value, log_likihood = c.calculate()
     #del c
     #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-
+    
     cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, frames, iters)
     cw.update()
 
     if update_b :
-        cb = utils_cl.Update_b_sparse(B, Ksums, cw)
+        cb = utils_cl.Update_b(B, Ksums, cw)
         cb.update()
     
     # Save

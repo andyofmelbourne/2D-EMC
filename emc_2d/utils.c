@@ -2,6 +2,9 @@ constant sampler_t trilinear = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP |
 constant sampler_t nearest = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST ;
 
 
+// T[i, t, r]    = w[d] W[i, t, r] + b[d] B[i]
+// logR[d, t, r] = beta sum_i K[i, d] log T[i, t, r] - T[i, t, r]
+
 __kernel void calculate_LR (
     image2d_array_t I, 
     global float *LR,  
@@ -64,12 +67,8 @@ __kernel void calculate_LR (
         logR += K[pixels * Kindex + i] * log(T) - T ;
     }
 
-    LR[rotations * classes * frame + rotations * class + rotation] = beta * logR;
+    LR[rotations * classes * Kindex + rotations * class + rotation] = beta * logR;
 }
-
-// T[i, t, r]    = w[d] W[i, t, r] + b[d] B[i]
-// logR[d, t, r] = beta sum_i K[i, d] log T[i, t, r] - T[i, t, r]
-
 
 
 
@@ -349,7 +348,7 @@ kernel void update_w(
             
             T = x + B_l / (C_l * W.x);
             
-            PK      = P[d * rotations * classes + t * rotations + r] * K_l;
+            PK      = P[t * rotations + r] * K_l;
             f[wid] += PK / T ;
             g[wid] -= PK / (T*T) ;
         }}
@@ -443,7 +442,7 @@ kernel void update_b(
             
             T = x + B_l * W.x ;
             
-            PK      = P[d * rotations * classes + t * rotations + r] * K_l;
+            PK      = P[t * rotations + r] * K_l;
             f[wid] += PK / T ;
             g[wid] -= PK / (T*T) ;
         }}}
