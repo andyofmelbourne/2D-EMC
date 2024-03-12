@@ -701,7 +701,7 @@ class Update_b():
             events[index] = cl_code.update_b2(queue2, (256,), (256,), 
                              self.I_cl, self.B_cl[index].data, 
                              self.w_cl.data, self.b_cl.data,
-                             self.K_cl[index].data, self.P_cl.data,
+                             self.K_cl[index].data, self.P_cl[index].data,
                              self.c, self.xmax_cl.data, 
                              self.iters, self.frames, self.classes,  
                              self.rotations, pixels, d, 

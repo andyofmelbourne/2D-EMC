@@ -72,7 +72,7 @@ for i in range(iteration, iteration + config['iters']):
     c = utils_cl.Prob(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
-
+    
     # Maximise + Compress
     # -------------------
     cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
