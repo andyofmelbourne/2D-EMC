@@ -363,7 +363,9 @@ class Update_W():
 
         # skip unpopular rotations for a given class
         # but not unpopular classes, since we want to keep updating them
-        favour_rotations = np.sum(P, axis = (0,))
+        for t in tqdm(range(1), desc = 'calculating per-frame favour', disable = silent) :
+            favour_rotations = np.sum(P, axis = (0,))
+        
         self.mask_rotations   = {}
         skipped_rots = 0
         for t in tqdm(self.my_classes, desc = 'masking rotations based on low P-value', disable = silent) :
@@ -376,9 +378,9 @@ class Update_W():
         favour_frames = np.sum(P, axis = (0, 2))
         self.mask_frames   = {}
         skipped_ds = 0
-        for t in tqdm(self.my_classes, desc = 'masking frames for a given class rotation based on low P-value', disable = silent) :
+        for t in tqdm(self.my_classes, desc = 'masking frames for a given (class, rotation) based on low P-value', disable = silent) :
             for r in range(rotations):
-                p = P[:, t, r]
+                p = P[:, t, r].copy()
                 self.mask_frames[(t, r)] = np.where(p > (1e-3 * np.max(p)))[0].astype(np.int32)
                 self.weights[t, r] += np.sum(p[self.mask_frames[(t, r)]])
                 skipped_ds += frames - self.mask_frames[(t, r)].shape[0]
