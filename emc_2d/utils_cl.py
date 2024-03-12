@@ -366,7 +366,7 @@ class Update_W():
         favour_rotations = np.sum(P, axis = (0,))
         self.mask_rotations   = {}
         skipped_rots = 0
-        for t in tqdm(range(classes), desc = 'masking rotations based on low P-value', disable = silent) :
+        for t in tqdm(self.my_classes, desc = 'masking rotations based on low P-value', disable = silent) :
             self.mask_rotations[t] = np.where(favour_rotations[t] > (1e-3 * np.max(favour_rotations[t])))[0].astype(np.int32)
             skipped_rots += rotations - self.mask_rotations[t].shape[0]
         
@@ -376,7 +376,7 @@ class Update_W():
         favour_frames = np.sum(P, axis = (0, 2))
         self.mask_frames   = {}
         skipped_ds = 0
-        for t in tqdm(range(classes), desc = 'masking frames for a given class rotation based on low P-value', disable = silent) :
+        for t in tqdm(self.my_classes, desc = 'masking frames for a given class rotation based on low P-value', disable = silent) :
             for r in range(rotations):
                 p = P[:, t, r]
                 self.mask_frames[(t, r)] = np.where(p > (1e-3 * np.max(p)))[0].astype(np.int32)
