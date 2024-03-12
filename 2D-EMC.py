@@ -1,7 +1,5 @@
 import numpy as np
 import h5py
-from emc_2d import utils_cl
-from emc_2d import utils
 from tqdm import tqdm
 import sys
 
@@ -10,16 +8,27 @@ comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
+print(f'rank {rank} initialising opencl environment')
+sys.stdout.flush()
+from emc_2d import utils_cl
+from emc_2d import utils
+
 
 """
 Assume W is too big to fit in memory
 """
 
 # load configuration file
-config = utils.load_config(sys.argv[1] + '/config.py')
+config_fnam = sys.argv[1] + '/config.py'
+config = utils.load_config(config_fnam)
+print(f'rank {rank} loading configuration file {config_fnam}')
+sys.stdout.flush()
 
 # take the reconstruction directory as the argument
-with h5py.File(sys.argv[1] + '/recon.h5', 'r') as f:
+recon_fnam = sys.argv[1] + '/recon.h5'
+print(f'rank {rank} loading reconstruction file {recon_fnam}')
+sys.stdout.flush()
+with h5py.File(recon_fnam, 'r') as f:
     I = f['models'][()]
     w = f['fluence'][()]
     logR = f['logR'][()]
