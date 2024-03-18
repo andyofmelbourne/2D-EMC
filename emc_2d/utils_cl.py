@@ -111,7 +111,7 @@ class Prob():
         seems to be pretty fast anyway...
         """
         # split frames by MPI rank
-        self.dchunk = 64
+        self.dchunk = 2048
         self.d_list, dstart, dstop = self.my_frames(rank, P.shape[0], self.dchunk)
         self.dstart = dstart
         self.dstop  = dstop
@@ -309,7 +309,7 @@ class Update_W():
 
         # chunk over pixels
         pixels    = B.shape[-1]
-        pc = 2**13
+        pc = 2**12
         #pc = 25058//2
         i = np.arange(0, pixels+pc, pc, dtype=np.int32)
         self.istart = i[:-1]
