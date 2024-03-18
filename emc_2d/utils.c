@@ -32,16 +32,6 @@ __kernel void calculate_LR (
         
     int frame = d0 + Kindex;
 
-    //int g0 = get_num_groups(0);
-    //int g1 = get_num_groups(1);
-    //int g2 = get_num_groups(2);
-    //
-    //int w0 = get_local_size(0);
-    //int w1 = get_local_size(1);
-    //int w2 = get_local_size(2);
-    //printf("%d %d %d %d %d %d \n", g0, g1, g2, w0, w1, w2);
-    //printf("%d %d %d %d %d %d \n", rotations, classes, frames, rotation, class, Kindex);
-    
     float R_l[4];
     float T;
     float logR = 0.;
@@ -310,7 +300,7 @@ kernel void update_w(
 
     local float f[256];
     local float g[256];
-
+    
     local float x ;
 
 
@@ -339,7 +329,7 @@ kernel void update_w(
         for (j = 0; j < class_rotation_list_len; j++){
             t = class_rotation_list[2*j + 0]; 
             r = class_rotation_list[2*j + 1]; 
-        
+              
             coord.y = i0 + (R[4*r + 0] * rx_l + R[4*r + 1] * ry_l) / dx + 0.5;
             coord.x = i0 + (R[4*r + 2] * rx_l + R[4*r + 3] * ry_l) / dx + 0.5;
             coord.z = t ;
@@ -371,6 +361,71 @@ kernel void update_w(
     }
 
     if (wid == 0) w[d] = x;
+}
+
+__kernel void calculate_fg_w (
+    image2d_array_t I, 
+    global float *P,  
+    global unsigned char *K, 
+    global float *w,
+    global float *b, 
+    global float *B, 
+    global float *C, 
+    global float *R, 
+    global float *rx, 
+    global float *ry, 
+    global float *f_g, 
+    global float *g_g, 
+    
+    const float i0,
+    const float dx,
+    const int pixels, 
+    const int d0)
+{
+    // frame index in sub-chunk
+    int Kindex   = get_global_id(2);
+    int class    = get_global_id(1);
+    int rotation = get_global_id(0);
+    
+    int frames    = get_global_size(2);
+    int classes   = get_global_size(1);
+    int rotations = get_global_size(0);
+        
+    // frame index in MPI-chunk
+    int frame = d0 + Kindex;
+    
+    float R_l[4];
+    float T, PK;
+    
+    int i;
+    
+    for (i=0; i<4; i++) {
+        R_l[i] = R[4*rotation + i];
+    }
+    
+    float4 coord ;
+    float4 W;
+    
+    coord.z = class ;
+    
+    float f = 0.;
+    float g = 0.;
+    for (i=0; i<pixels; i++) {
+        coord.y = i0 + (R_l[0] * rx[i] + R_l[1] * ry[i]) / dx + 0.5;
+        coord.x = i0 + (R_l[2] * rx[i] + R_l[3] * ry[i]) / dx + 0.5;
+        
+        W = read_imagef(I, trilinear, coord);
+        
+        // hopefully caching deals with repeated reads of w[frame], b[frame] and P over pixels
+        T   = w[frame] + b[frame] * B[i]/ (C[i] * W.x) ;
+        PK  = K[pixels * Kindex + i] * P[rotations * classes * frame + rotations * class + rotation] ;
+        
+        f += PK / T ;
+        g -= PK / (T*T) ;
+    }
+    
+    f_g[classes * rotations * Kindex + rotations * class + rotation ] = f;
+    g_g[classes * rotations * Kindex + rotations * class + rotation ] = g;
 }
 
 

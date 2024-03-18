@@ -57,3 +57,32 @@ Line search to find points where gradients are zero:
 - sum_ri (O[t, mi[i], mj[j]] += i)
 - I /= O
 
+## Notes
+### update W
+updating tomograms per class, rotation, looping over frames, kernel call over pixel chunks:
+    - each work item operates on one pixel 
+    - broadcast P[d], w[d], b[d], coallesed read of K[i], B[i]
+    - each of these is read once per frame, class, rotation, pixel and iter (1e15)
+    - that is 4 floats = 3600 TB 
+    - and 1 char (K) = 914 TB (although a char is probably just as slow as a float)
+    - for a total of 15.5 PB of reading
+    - 15.5 PB / (1.5 terabyetes/s A100) = 3 hours
+    - calculate T, 3 flops per iter = 3 petaFLOP
+    - + the rest = 9 petaFLOP
+    - 9 petaFLOP / (19.5 teraFLOPS A100) = 7.9 minutes
+
+amaizing if that 7.9 minutes is correct. I'm guessing I am way below that though factor of 10-100 1.3 13 hours.
+
+On paper, it's the global reads I have to reduce, but perhaps caching makes this better already.
+
+### update w
+update w per frame, one work group per frame w work group reduce for summing:
+    - each work item loops over a subset of pixels
+    - main issue is that all W are recalculated for each frame
+    - that's at least 4 petaFlOP 
+    - could reduce this by looping over frames and pixels within a work group
+    - This is essentially the same thing that happens in the logR calc, compare 
+      each tomogram to each frame, but multiplied by iter
+    
+    
+updating tomograms per class, rotation, looping over frames, kernel call over pixel chunks:

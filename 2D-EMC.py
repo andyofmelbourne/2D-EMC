@@ -84,12 +84,13 @@ for i in range(iteration, iteration + config['iters']):
     #del c
     #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
-    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, frames, iters)
+    w = w.copy()
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters)
     cw.update()
-
-    if update_b :
-        cb = utils_cl.Update_b(B, Ksums, cw)
-        cb.update()
+    
+    #if update_b :
+    #    cb = utils_cl.Update_b(B, Ksums, cw)
+    #    cb.update()
     
     # Save
     # ----
