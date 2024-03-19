@@ -176,13 +176,12 @@ class Prob():
         
         logR = self.logR
         P    = self.P
-        dchunk = 64
-        self.K_cl  = cl.array.empty(queue, (dchunk, self.pixels,) , dtype = np.uint8)
-        K          = np.empty((dchunk, self.pixels,), dtype = np.uint8)
+        self.K_cl  = cl.array.empty(queue, (self.dchunk, self.pixels,) , dtype = np.uint8)
+        K          = np.empty((self.dchunk, self.pixels,), dtype = np.uint8)
         
         for i_d, d in tqdm(enumerate(self.d_list), total = len(self.d_list), 
                          desc = 'calculating logR matrix', disable = silent):
-            d1 = min(d+dchunk, self.dstop)
+            d1 = min(d+self.dchunk, self.dstop)
             dd = d1 - d 
             
             # make dense K over frames chunk size
@@ -216,7 +215,7 @@ class Prob():
             for r in range(size):
                 r_ds, dstart, dstop = self.my_frames(r, self.P.shape[0], self.dchunk)
                 d = r_ds[i_d]
-                d1 = min(d+dchunk, dstop)
+                d1 = min(d+self.dchunk, dstop)
                 dd = d1 - d 
                 self.logR[d:d1] = comm.bcast(self.logR[d:d1], root=r)
                 self.P[d:d1]    = comm.bcast(self.P[d:d1], root=r)
