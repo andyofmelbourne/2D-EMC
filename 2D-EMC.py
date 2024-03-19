@@ -88,10 +88,10 @@ for i in range(iteration, iteration + config['iters']):
     cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters)
     cw.update()
     
-    #if update_b :
-    #    cb = utils_cl.Update_b(B, Ksums, cw)
-    #    cb.update()
-    
+    if update_b :
+        cb = utils_cl.Update_b(B, Ksums, cw)
+        cb.update()
+        
     # Save
     # ----
     if rank == 0 : 
