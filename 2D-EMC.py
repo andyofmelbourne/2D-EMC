@@ -66,18 +66,21 @@ Wsums = utils_cl.calculate_Wsums(C, R, I, xyz, dx)
 for i in range(iteration, iteration + config['iters']): 
     beta     = config['betas'][min(config['iters']-1, i)]
     update_b = config['update_b'][min(config['iters']-1, i)]
+    no_back  = config['no_back'][min(config['iters']-1, i)]
 
     # Probability matrix
     # ------------------
     c = utils_cl.Prob(C, R, inds, K, w, I, b, B, logR, P, xyz, dx, beta)
     expectation_value, log_likihood = c.calculate()
     if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
+
     
     # Maximise + Compress
     # -------------------
-    cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters)
+    cW = utils_cl.Update_W(w, I, b, B, P, inds, K, C, R, xyz, dx, pixels, minval = 1e-10, iters = iters, no_back = no_back)
     cW.update()
     Wsums = cW.Wsums.copy()
+
 
     #c = utils_cl.Prob(C, R, K, w, I, b, B, logR, P.copy(), xyz, dx, beta)
     #expectation_value, log_likihood = c.calculate()
@@ -85,13 +88,15 @@ for i in range(iteration, iteration + config['iters']):
     #if rank == 0 : print('expectation value: {:.6e}'.format(np.sum(P * logR) / beta))
     
     w = w.copy()
-    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters)
+    cw = utils_cl.Update_w(Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters, no_back)
     cw.update()
     
     if update_b :
         cb = utils_cl.Update_b(B, Ksums, cw)
         cb.update()
+        del cb
         
+
     # Save
     # ----
     if rank == 0 : 

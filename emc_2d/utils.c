@@ -196,22 +196,14 @@ global int *frame_list,
 const float c,
 const int iters,
 const int frames,
-const int pixels)
+const int pixels,
+const int no_back)
 {
 int j, d, iter;
 float xmax = 0.;
 float T, f, g, step, PK;
 
 int i = get_global_id(0);
-
-//int g0 = get_num_groups(0);
-//int g1 = get_num_groups(1);
-//int g2 = get_num_groups(2);
-//
-//int w0 = get_local_size(0);
-//int w1 = get_local_size(1);
-//int w2 = get_local_size(2);
-//printf("%d %d\n", w0, g0);
 
 if (i < pixels){
 
@@ -221,26 +213,33 @@ for (j=0; j<frames; j++){
 }
 xmax /= c;
 
-float W = xmax / 2.;
+float W = xmax;
 
-for (iter=0; iter<iters; iter++){
-    f = 0.;
-    g = 0.;
-    for (j=0; j<frames; j++){
-        d = frame_list[j];
-        T  = W + b[d] * B[i] / w[d];
-        PK = P[d] * K[d * pixels + i];
-        f += PK / T ;
-        g -= PK / (T*T) ;
+if (no_back == 1) {
+
+    Wout[i] = W;
+
+} else {
+
+    for (iter=0; iter<iters; iter++){
+        f = 0.;
+        g = 0.;
+        for (j=0; j<frames; j++){
+            d = frame_list[j];
+            T  = W + b[d] * B[i] / w[d];
+            PK = P[d] * K[d * pixels + i];
+            f += PK / T ;
+            g -= PK / (T*T) ;
+        }
+        
+        step = f / g * (1 - f / c);
+        
+        W += step;
+        W = clamp(W, (float)1e-8, xmax) ;
     }
-    
-    step = f / g * (1 - f / c);
-    
-    W += step;
-    W = clamp(W, (float)1e-8, xmax) ;
-}
 
-Wout[i] = W;
+    Wout[i] = W;
+    }
 }
 }
 

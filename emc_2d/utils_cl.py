@@ -298,10 +298,12 @@ class Update_W():
         P-sparsity...
     """
     
-    def __init__(self, w, I, b, B, P, inds, K, C, R, xyz, dx, pixel_chunk_size, minval = 1e-10, iters = 4):
+    def __init__(self, w, I, b, B, P, inds, K, C, R, xyz, dx, pixel_chunk_size, minval = 1e-10, iters = 4, no_back = False):
         if not silent :
             print()
             print('initialising update_W routine')
+
+        self.no_back = np.int32(no_back)
         
         # split classes by MPI rank
         self.my_classes = np.arange(rank, I.shape[0], size)
@@ -439,7 +441,7 @@ class Update_W():
                                      self.frame_list_cl.data,
                                      self.c[t, r], self.iters, 
                                      np.int32(self.mask_frames[(t, r)].shape[0]), 
-                                     self.pixels)
+                                     self.pixels, self.no_back)
                                  
                     cl.enqueue_copy(queue, dest = self.Wbuf, src = self.W_cl.data)
     
@@ -463,7 +465,7 @@ class Update_W():
         np.clip(self.I, self.minval, None, self.I)
         
 class Update_w():
-    def __init__(self, Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters):
+    def __init__(self, Ksums, Wsums, P, w, I, b, B, inds, K, C, R, dx, xyz, iters, no_back = False):
         """
         keep i on the slow axis to speed up the sum
         
@@ -484,6 +486,15 @@ class Update_w():
         
         # calculate xmax[d] = sum_i K[d, i] / c[d]
         self.xmax = Ksums[dstart: dstop].astype(np.float32) / self.c
+
+        self.P = P
+        self.inds = inds
+        self.K    = K
+        self.b    = b
+        self.w    = w
+        self.no_back = no_back
+        if no_back :
+            return 
         
         self.frames    = frames    = np.int32(dstop - dstart)
         self.classes   = classes   = np.int32(P.shape[1])
@@ -494,11 +505,6 @@ class Update_w():
         
         self.i0 = np.float32(I.shape[-1] // 2)
         
-        self.P = P
-        self.inds = inds
-        self.K    = K
-        self.w    = w
-        self.b    = b
         
         self.P_cl    = cl.array.zeros(queue, (frames, classes, rotations), dtype = np.float32)
         self.w_cl    = cl.array.empty(queue, (self.dchunk,)   , dtype = np.float32)
@@ -538,7 +544,14 @@ class Update_w():
     
     def update(self): 
         if not silent : print()
-        
+
+        if self.no_back :
+            self.w[self.dstart: self.dstop] = self.xmax
+            for r in range(size):
+                r_ds, dstart, dstop = self.my_frames(r, self.P.shape[0], self.dchunk)
+                self.w[dstart:dstop] = comm.bcast(self.w[dstart: dstop], root=r)
+            return  
+            
         dchunk = self.dchunk
         self.K_cl  = cl.array.empty(queue, (dchunk, self.pixels,) , dtype = np.uint8)
         K          = np.empty((dchunk, self.pixels,), dtype = np.uint8)

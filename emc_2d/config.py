@@ -28,6 +28,7 @@ update_b = np.ones((iters,), dtype=bool)
 update_b[0] = False
 update_B = np.zeros((iters,), dtype=bool)
 betas = iters*[0.001]
+no_back = iters*[False]
 #beta_start = 0.001
 #beta_stop  = 0.01
 #betas = (beta_stop / beta_start)**(np.arange(iters)/(iters-1)) * beta_start
