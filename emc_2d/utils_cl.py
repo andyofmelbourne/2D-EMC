@@ -547,7 +547,6 @@ class Update_w():
         g_cl  = cl.array.empty(queue, (dchunk, self.classes, self.rotations) , dtype = np.float32)
         f     = np.empty((dchunk, self.classes, self.rotations) , dtype = np.float32)
         g     = np.empty((dchunk, self.classes, self.rotations) , dtype = np.float32)
-
         
         for i_d, d in tqdm(enumerate(self.d_list), total = len(self.d_list), 
                          desc = 'updating fluence estimates', disable = silent):
@@ -564,21 +563,23 @@ class Update_w():
             for i, di in enumerate(range(d, d1)):
                 K[i, self.inds[di]] = self.K[di]
             cl.enqueue_copy(queue, self.K_cl.data, K)
-
+             
             for iter in range(6):
                 cl.enqueue_copy(queue, dest = self.w_cl.data, src = self.w[d: d1])
+                cl.enqueue_copy(queue, dest = self.b_cl.data, src = self.b[d: d1, :])
                 
                 cl_code.calculate_fg_w(queue, (self.rotations, self.classes, np.int32(dd)), None,
                         self.I_cl, self.P_cl.data, self.K_cl.data, self.w_cl.data, 
                         self.b_cl.data, self.B_cl.data, self.C_cl.data, self.R_cl.data, 
                         self.rx_cl.data, self.ry_cl.data, f_cl.data, g_cl.data,
                         self.i0, self.dx, self.pixels, np.int32(dc0))
-
+                
                 cl.enqueue_copy(queue, src = f_cl.data, dest = f)
                 cl.enqueue_copy(queue, src = g_cl.data, dest = g)
                 
                 fsum = np.sum(f, axis = (1,2))[:dd]
                 gsum = np.sum(g, axis = (1,2))[:dd]
+            
                 step = fsum / gsum * (1 - fsum / c)
                 self.w[d: d1] = np.clip(self.w[d: d1] + step, 1e-3, xmax) 
              
@@ -671,6 +672,7 @@ class Update_b():
 
             for iter in range(6):
                 cl.enqueue_copy(queue, dest = self.b_cl.data, src = self.b[d: d1, :])
+                cl.enqueue_copy(queue, dest = self.w_cl.data, src = self.w[d: d1])
                 
                 cl_code.calculate_fg_b(queue, (self.rotations, self.classes, np.int32(dd)), None,
                         self.I_cl, self.P_cl.data, self.K_cl.data, self.w_cl.data, 

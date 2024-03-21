@@ -417,11 +417,13 @@ __kernel void calculate_fg_w (
         W = read_imagef(I, trilinear, coord);
         
         // hopefully caching deals with repeated reads of w[frame], b[frame] and P over pixels
-        T   = w[frame] + b[frame] * B[i]/ (C[i] * W.x) ;
+        T   = w[Kindex] + b[Kindex] * B[i]/ (C[i] * W.x) ;
         PK  = K[pixels * Kindex + i] * P[rotations * classes * frame + rotations * class + rotation] ;
         
         f += PK / T ;
         g -= PK / (T*T) ;
+        
+        
     }
     
     f_g[classes * rotations * Kindex + rotations * class + rotation ] = f;
@@ -482,7 +484,7 @@ __kernel void calculate_fg_b (
         W = read_imagef(I, trilinear, coord);
         
         // hopefully caching deals with repeated reads of w[frame], b[frame] and P over pixels
-        T   = b[frame] + w[frame] * C[i] * W.x / B[i] ;
+        T   = b[Kindex] + w[Kindex] * C[i] * W.x / B[i] ;
         PK  = K[pixels * Kindex + i] * P[rotations * classes * frame + rotations * class + rotation] ;
         
         f += PK / T ;
