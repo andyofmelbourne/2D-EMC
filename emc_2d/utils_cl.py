@@ -202,6 +202,8 @@ class Prob():
             # test offset
             #assert(np.allclose(logR[self.dstart: d1], self.LR_cl.get()[:d1-self.dstart]))
              
+            print('\nhello1\n')
+            sys.stdout.flush()
             for d in range(d, d1):
                 m        = np.max(logR[d])
                 P[d]     = logR[d] - m
@@ -212,6 +214,8 @@ class Prob():
                 self.log_likihood      += np.sum(logR[d])        / self.beta
 
             # allgather here to reduce size
+            print('\nhello2\n')
+            sys.stdout.flush()
             for r in range(size):
                 r_ds, dstart, dstop = self.my_frames(r, self.P.shape[0], self.dchunk)
                 d = r_ds[i_d]
@@ -220,6 +224,8 @@ class Prob():
                 self.logR[d:d1] = comm.bcast(self.logR[d:d1], root=r)
                 self.P[d:d1]    = comm.bcast(self.P[d:d1], root=r)
         
+        print('\nhello3\n')
+        sys.stdout.flush()
         self.expectation_value = comm.allreduce(self.expectation_value)
         self.log_likihood      = comm.allreduce(self.log_likihood)
         return self.expectation_value, self.log_likihood
@@ -307,6 +313,8 @@ class Update_W():
         
         # split classes by MPI rank
         self.my_classes = np.arange(rank, I.shape[0], size)
+
+        self.no_back = np.int32(no_back)
 
         # chunk over pixels
         pixels    = B.shape[-1]
@@ -414,6 +422,9 @@ class Update_W():
         K2 = np.zeros((self.frames, self.pixels), dtype=np.uint8)
         k  = np.zeros((self.B.shape[-1],), dtype=np.uint8)
         
+        print('\nhello\n')
+        sys.stdout.flush()
+        
         for i, istart in tqdm(enumerate(self.istart), total = len(self.istart), desc='updating classes over pixel chunks', disable = silent):
             istop = self.istop[i]
             di    = istop - istart
@@ -434,20 +445,26 @@ class Update_W():
                      
                     cl.enqueue_copy(queue, dest = self.frame_list_cl.data, src = self.mask_frames[(t, r)])
                     
-                    cl_code.update_W(queue, (di,), None, 
-                                     self.W_cl.data, self.B_cl.data, 
-                                     self.w_cl.data, self.b_cl.data,
-                                     self.K_cl.data, self.P_cl.data,
-                                     self.frame_list_cl.data,
-                                     self.c[t, r], self.iters, 
-                                     np.int32(self.mask_frames[(t, r)].shape[0]), 
-                                     self.pixels, self.no_back)
-                                 
+                    if self.no_back :
+                        cl_code.calculate_xmax_W(queue, (di,), None, 
+                                         self.W_cl.data, 
+                                         self.K_cl.data, self.P_cl.data,
+                                         self.frame_list_cl.data,
+                                         self.c[t, r], 
+                                         np.int32(self.mask_frames[(t, r)].shape[0]), 
+                                         self.pixels)
+                    else :
+                        cl_code.update_W(queue, (di,), None, 
+                                         self.W_cl.data, self.B_cl.data, 
+                                         self.w_cl.data, self.b_cl.data,
+                                         self.K_cl.data, self.P_cl.data,
+                                         self.frame_list_cl.data,
+                                         self.c[t, r], self.iters, 
+                                         np.int32(self.mask_frames[(t, r)].shape[0]), 
+                                         self.pixels)
+
                     cl.enqueue_copy(queue, dest = self.Wbuf, src = self.W_cl.data)
     
-                    # test
-                    #self.W[t, r, istart: istop] = self.Wbuf[:di]
-                    
                     self.merge_pixels(t, r, istart, istop)
         self.allgather()
         
@@ -481,20 +498,21 @@ class Update_w():
         self.dstart = dstart
         self.dstop  = dstop
         
+        self.P = P
+        self.inds = inds
+        self.K    = K
+        self.w    = w
+        self.b    = b
+        
         # calculate c[d] = sum_tr P[d, t, r] sum_i W[t, r, i]
         self.c = np.sum(P[dstart:dstop] * Wsums, axis=(1,2))
         
         # calculate xmax[d] = sum_i K[d, i] / c[d]
         self.xmax = Ksums[dstart: dstop].astype(np.float32) / self.c
 
-        self.P = P
-        self.inds = inds
-        self.K    = K
-        self.b    = b
-        self.w    = w
-        self.no_back = no_back
-        if no_back :
-            return 
+        self.no_back = np.int32(no_back)
+        if no_back:
+            return
         
         self.frames    = frames    = np.int32(dstop - dstart)
         self.classes   = classes   = np.int32(P.shape[1])
@@ -550,8 +568,8 @@ class Update_w():
             for r in range(size):
                 r_ds, dstart, dstop = self.my_frames(r, self.P.shape[0], self.dchunk)
                 self.w[dstart:dstop] = comm.bcast(self.w[dstart: dstop], root=r)
-            return  
-            
+            return
+        
         dchunk = self.dchunk
         self.K_cl  = cl.array.empty(queue, (dchunk, self.pixels,) , dtype = np.uint8)
         K          = np.empty((dchunk, self.pixels,), dtype = np.uint8)
